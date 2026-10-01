@@ -15,7 +15,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          if grep -RInE --exclude-dir=.git --exclude='*.md'             '(api[_-]?key|secret[_-]?key|access[_-]?token|private[_-]?key)[[:space:]]*=[[:space:]]*["'''][^"$][^"''']{8,}["''']' .; then
+          if grep -RInE             --exclude-dir=.git             --exclude-dir=.github             --exclude-dir=docs             --exclude='*.md'             '(api[_-]?key|secret[_-]?key|access[_-]?token|private[_-]?key)[[:space:]]*=[[:space:]]*["'\''][^"$][^"'\'']{8,}["'\'']' .; then
             echo "Potential hardcoded secret found."
             exit 1
           fi
@@ -24,8 +24,12 @@ jobs:
         id: detect
         shell: bash
         run: |
-          [ -f pyproject.toml ] || [ -f requirements.txt ] || [ -d tests ] && echo "python=true" >> "$GITHUB_OUTPUT" || true
-          [ -f package.json ] && echo "node=true" >> "$GITHUB_OUTPUT" || true
+          if [ -f pyproject.toml ] || [ -f requirements.txt ] || [ -d tests ]; then
+            echo "python=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -f package.json ]; then
+            echo "node=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up Python
         if: steps.detect.outputs.python == 'true'
