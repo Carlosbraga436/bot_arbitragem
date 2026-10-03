@@ -4,11 +4,13 @@ export const DEFAULT_COSTS = Object.freeze({
     bybit: 0.10,
     okx: 0.40,
     gate: 0.10,
+    kucoin: 0.30,
   }),
   binanceFeePct: 0.10,
   bybitFeePct: 0.10,
   okxFeePct: 0.40,
   gateFeePct: 0.10,
+  kucoinFeePct: 0.30,
   reservePct: 0.05,
   recompositionUsdt: 0.50,
 });
