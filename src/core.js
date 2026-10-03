@@ -19,6 +19,7 @@ export const DEFAULT_RULES = Object.freeze({
   maxAgeMs: 5_000,
   maxSkewMs: 2_000,
   minBudgetFillPct: 100,
+  budgetMode: 'maximum',
   maxUnverifiedGrossSpreadPct: 5,
   maxVenueDeviationPct: 3,
 });
@@ -123,6 +124,52 @@ export function consumeBase(bids, baseQty) {
   };
 }
 
+export function quoteCostForBase(asks, baseTarget) {
+  let baseLeft = finitePositive(baseTarget);
+  if (!baseLeft) return null;
+  let baseBought = 0;
+  let quoteSpent = 0;
+
+  for (const [price, qty] of asks) {
+    const takeBase = Math.min(baseLeft, qty);
+    baseBought += takeBase;
+    quoteSpent += takeBase * price;
+    baseLeft -= takeBase;
+    if (baseLeft <= 1e-12) break;
+  }
+
+  return {
+    filled: baseLeft <= 1e-12,
+    baseBought,
+    quoteSpent,
+    vwap: baseBought > 0 ? quoteSpent / baseBought : null,
+  };
+}
+
+export function visibleExecutableBudget(buyBook, sellBook, requestedBudgetUsdt) {
+  const buy = normalizeBook(buyBook);
+  const sell = normalizeBook(sellBook);
+  const requested = finitePositive(requestedBudgetUsdt);
+  if (!buy || !sell || !requested) return null;
+
+  const buyBaseCapacity = buy.asks.reduce((sum, [, qty]) => sum + qty, 0);
+  const sellBaseCapacity = sell.bids.reduce((sum, [, qty]) => sum + qty, 0);
+  const executableBase = Math.min(buyBaseCapacity, sellBaseCapacity);
+  if (!(executableBase > 0)) return null;
+
+  const capacity = quoteCostForBase(buy.asks, executableBase);
+  if (!capacity?.filled || !(capacity.quoteSpent > 0)) return null;
+
+  const executableBudgetUsdt = Math.min(requested, capacity.quoteSpent);
+  return {
+    requestedBudgetUsdt: requested,
+    executableBudgetUsdt,
+    visibleCapacityUsdt: capacity.quoteSpent,
+    liquidityLimited: executableBudgetUsdt + 1e-9 < requested,
+    executionSharePct: (executableBudgetUsdt / requested) * 100,
+  };
+}
+
 function pctToRate(pct) {
   const n = Number(pct);
   return Number.isFinite(n) && n >= 0 ? n / 100 : 0;
@@ -153,8 +200,8 @@ export function evaluateRoute({
 
   const buy = normalizeBook(buyBook);
   const sell = normalizeBook(sellBook);
-  const budget = finitePositive(budgetUsdt);
-  if (!buy || !sell || !budget) return { eligible: false, reason: 'invalid_data', symbol };
+  const requestedBudget = finitePositive(budgetUsdt);
+  if (!buy || !sell || !requestedBudget) return { eligible: false, reason: 'invalid_data', symbol };
 
   const buyAgeMs = now - buy.ts;
   const sellAgeMs = now - sell.ts;
@@ -164,9 +211,31 @@ export function evaluateRoute({
   }
   if (skewMs > rules.maxSkewMs) return { eligible: false, reason: 'desynced_data', symbol, skewMs };
 
+  const flexibleBudget = rules?.budgetMode === 'maximum'
+    ? visibleExecutableBudget(buy, sell, requestedBudget)
+    : {
+        requestedBudgetUsdt: requestedBudget,
+        executableBudgetUsdt: requestedBudget,
+        visibleCapacityUsdt: null,
+        liquidityLimited: false,
+        executionSharePct: 100,
+      };
+
+  const budget = flexibleBudget?.executableBudgetUsdt;
+  if (!finitePositive(budget)) {
+    return { eligible: false, reason: 'insufficient_buy_liquidity', symbol, fillPct: 0 };
+  }
+
   const bought = consumeQuote(buy.asks, budget);
   if (!bought?.filled || bought.fillPct < rules.minBudgetFillPct) {
-    return { eligible: false, reason: 'insufficient_buy_liquidity', symbol, fillPct: bought?.fillPct ?? 0 };
+    return {
+      eligible: false,
+      reason: 'insufficient_buy_liquidity',
+      symbol,
+      fillPct: bought?.fillPct ?? 0,
+      requestedBudgetUsdt: requestedBudget,
+      executableBudgetUsdt: budget,
+    };
   }
 
   const sold = consumeBase(sell.bids, bought.baseQty);
@@ -188,6 +257,11 @@ export function evaluateRoute({
       buyExchange,
       sellExchange,
       budgetUsdt: budget,
+      requestedBudgetUsdt: requestedBudget,
+      executableBudgetUsdt: budget,
+      visibleCapacityUsdt: flexibleBudget?.visibleCapacityUsdt ?? null,
+      liquidityLimited: Boolean(flexibleBudget?.liquidityLimited),
+      executionSharePct: flexibleBudget?.executionSharePct ?? 100,
       baseQty: bought.baseQty,
       buyVwap: bought.vwap,
       sellVwap: sold.vwap,
@@ -219,6 +293,11 @@ export function evaluateRoute({
     buyExchange,
     sellExchange,
     budgetUsdt: budget,
+    requestedBudgetUsdt: requestedBudget,
+    executableBudgetUsdt: budget,
+    visibleCapacityUsdt: flexibleBudget?.visibleCapacityUsdt ?? null,
+    liquidityLimited: Boolean(flexibleBudget?.liquidityLimited),
+    executionSharePct: flexibleBudget?.executionSharePct ?? 100,
     baseQty: bought.baseQty,
     buyVwap: bought.vwap,
     sellVwap: sold.vwap,
