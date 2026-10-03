@@ -239,10 +239,12 @@ export function createMarketHub({ symbols = [], gateSymbols = [], logger = conso
 
   function storeBook(exchange, symbol, raw) {
     if (!symbol || !monitoredSet.has(symbol)) return false;
-    const book = topBook({ ...raw, ts:Date.now() });
+    const sourceTs = Number(raw?.ts);
+    const ts = Number.isFinite(sourceTs) && sourceTs > 0 ? sourceTs : Date.now();
+    const book = topBook({ ...raw, ts });
     if (!book) return false;
     books[exchange].set(symbol, book);
-    touch(exchange, book.ts);
+    touch(exchange, Date.now());
     return true;
   }
 
@@ -297,7 +299,11 @@ export function createMarketHub({ symbols = [], gateSymbols = [], logger = conso
       '/v5/market/tickers?category=spot',
       (data)=>data?.retCode === 0 && Array.isArray(data?.result?.list),
     );
-    return { base:result.base, list:result.data.result.list };
+    return {
+      base:result.base,
+      list:result.data.result.list,
+      ts:Number(result.data?.time) || Date.now(),
+    };
   }
 
   function connectBybit() {
@@ -314,6 +320,7 @@ export function createMarketHub({ symbols = [], gateSymbols = [], logger = conso
           if (storeBook('bybit',raw?.symbol,{
             bidPrice:raw?.bid1Price,bidQty:raw?.bid1Size,
             askPrice:raw?.ask1Price,askQty:raw?.ask1Size,
+            ts:result.ts,
           })) count += 1;
         }
         diagnostics.bybitPollsOk += 1;
@@ -362,6 +369,7 @@ export function createMarketHub({ symbols = [], gateSymbols = [], logger = conso
           if (storeBook('okx',symbol,{
             bidPrice:raw?.bidPx,bidQty:raw?.bidSz,
             askPrice:raw?.askPx,askQty:raw?.askSz,
+            ts:Number(raw?.ts) || Date.now(),
           })) count += 1;
         }
         diagnostics.okxPollsOk += 1;
@@ -427,6 +435,7 @@ export function createMarketHub({ symbols = [], gateSymbols = [], logger = conso
         const ok = storeBook('gate',symbol,{
           bidPrice:raw?.b,bidQty:raw?.B,
           askPrice:raw?.a,askQty:raw?.A,
+          ts:Number(msg?.time_ms) || (Number(msg?.time) ? Number(msg.time) * 1000 : Date.now()),
         });
         if (ok) {
           diagnostics.gateQuoteCount += 1;
