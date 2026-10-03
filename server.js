@@ -131,7 +131,18 @@ async function ensureRuntime() {
         `[catalog] ${catalog.exchangeUniverse.candidateUsdt} candidatos USDT Bybit; sondando ${catalog.monitoredSymbols.length} na Binance por WebSocket`
       );
 
-      return { catalog, marketHub };
+      const runtime = { catalog, marketHub };
+      setTimeout(() => {
+        try {
+          console.log('[diagnostics-100]', JSON.stringify(marketDiagnostics(runtime, 100)));
+          console.log('[diagnostics-500]', JSON.stringify(marketDiagnostics(runtime, 500)));
+          console.log('[diagnostics-1000]', JSON.stringify(marketDiagnostics(runtime, 1000)));
+        } catch (error) {
+          console.warn('[diagnostics] falhou:', error?.message || error);
+        }
+      }, 12_000);
+
+      return runtime;
     })().catch((error) => {
       runtimePromise = null;
       throw error;
