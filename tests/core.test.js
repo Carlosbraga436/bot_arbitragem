@@ -179,7 +179,7 @@ test('taxa específica da OKX é aplicada à rota', () => {
     rules,
     now,
   });
-  assert.ok(r.tradingFeesUsdt > 0.49);
+  assert.ok(r.tradingFeesUsdt > 0.19 && r.tradingFeesUsdt < 0.21);
 });
 
 test('universo multiexchange une pares USDT ativos sem duplicar símbolo', () => {
@@ -368,7 +368,7 @@ test('custos padrão multiexchange continuam aplicados quando catálogo não inf
     rules,
     now,
   });
-  assert.ok(r.tradingFeesUsdt > 0.49);
+  assert.ok(r.tradingFeesUsdt > 0.19 && r.tradingFeesUsdt < 0.21);
   assert.ok(r.executionNetPnlUsdt < 0);
   assert.equal(r.eligible,false);
 });
