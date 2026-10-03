@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyOrderBookMessage, evaluatePair, evaluateRoute, topPositive } from '../src/core.js';
-import { chunkTopics, createMarketHub, selectConfirmedSymbols } from '../src/market-hub.js';
+import { buildCommonUsdtMarkets, chunkTopics, createMarketHub, MAX_MONITORED_SYMBOLS, selectConfirmedSymbols } from '../src/market-hub.js';
 
 const now = 1_800_000_000_000;
 const book = (bid, ask, qty=1000, ts=now) => ({ bids:[[String(bid),String(qty)]], asks:[[String(ask),String(qty)]], ts });
@@ -63,24 +63,49 @@ test('market hub inicia em estado seguro e expõe símbolos sem credenciais', ()
 });
 
 
-test('Bybit spot divide 15 tópicos em lotes de no máximo 10', () => {
-  const topics = Array.from({ length: 15 }, (_, i) => `orderbook.50.S${i}USDT`);
+test('Bybit spot divide tópicos em lotes de no máximo 10', () => {
+  const topics = Array.from({ length: 25 }, (_, i) => `tickers.S${i}USDT`);
   const chunks = chunkTopics(topics);
-  assert.deepEqual(chunks.map((x) => x.length), [10, 5]);
+  assert.deepEqual(chunks.map((x) => x.length), [10, 10, 5]);
   assert.deepEqual(chunks.flat(), topics);
   assert.ok(chunks.every((x) => x.length <= 10));
 });
 
 
-test('seleção monitorada usa somente identidades confirmadas e preenche até o limite', () => {
+test('seleção monitorada prioriza liquidez comum e exclui identidade não confirmada', () => {
   const candidates = [
-    { symbol:'BTCUSDT', identityConfirmed:true },
-    { symbol:'ETHUSDT', identityConfirmed:true },
-    { symbol:'TONUSDT', identityConfirmed:false },
-    { symbol:'SHIBUSDT', identityConfirmed:true },
-    { symbol:'AAVEUSDT', identityConfirmed:true },
+    { symbol:'BTCUSDT', identityConfirmed:true, commonTurnover24hUsdt:1000 },
+    { symbol:'ETHUSDT', identityConfirmed:true, commonTurnover24hUsdt:5000 },
+    { symbol:'TONUSDT', identityConfirmed:false, commonTurnover24hUsdt:999999 },
+    { symbol:'SHIBUSDT', identityConfirmed:true, commonTurnover24hUsdt:2500 },
+    { symbol:'AAVEUSDT', identityConfirmed:true, commonTurnover24hUsdt:1200 },
   ];
-  const selected = selectConfirmedSymbols(candidates, ['BTCUSDT','ETHUSDT','TONUSDT','SHIBUSDT'], 4);
-  assert.deepEqual(selected, ['BTCUSDT','ETHUSDT','SHIBUSDT','AAVEUSDT']);
+  const selected = selectConfirmedSymbols(candidates, 4);
+  assert.deepEqual(selected, ['ETHUSDT','SHIBUSDT','AAVEUSDT','BTCUSDT']);
   assert.ok(!selected.includes('TONUSDT'));
+});
+
+test('catálogo dinâmico mantém somente par USDT ativo e idêntico nas duas exchanges', () => {
+  const markets = buildCommonUsdtMarkets({
+    binanceSymbols:[
+      {symbol:'ABCUSDT',baseAsset:'ABC',quoteAsset:'USDT',status:'TRADING'},
+      {symbol:'DEFUSDT',baseAsset:'DEF',quoteAsset:'USDT',status:'TRADING'},
+      {symbol:'OLDUSDT',baseAsset:'OLD',quoteAsset:'USDT',status:'BREAK'},
+    ],
+    bybitSymbols:[
+      {symbol:'ABCUSDT',baseCoin:'ABC',quoteCoin:'USDT',status:'Trading'},
+      {symbol:'DEFUSDT',baseCoin:'DIFFERENT',quoteCoin:'USDT',status:'Trading'},
+      {symbol:'XYZUSDT',baseCoin:'XYZ',quoteCoin:'USDT',status:'Trading'},
+    ],
+    binanceTickers:[{symbol:'ABCUSDT',quoteVolume:'9000'}],
+    bybitTickers:[{symbol:'ABCUSDT',turnover24h:'7000'}],
+  });
+  assert.deepEqual(markets.map((x)=>x.symbol), ['ABCUSDT']);
+  assert.equal(markets[0].commonTurnover24hUsdt, 7000);
+  assert.equal(markets[0].identityConfirmed, true);
+});
+
+test('teto amplo de monitoramento permanece abaixo de mil streams', () => {
+  assert.ok(MAX_MONITORED_SYMBOLS > 100);
+  assert.ok(MAX_MONITORED_SYMBOLS <= 1000);
 });
