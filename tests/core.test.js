@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyOrderBookMessage, evaluatePair, evaluateRoute, topPositive } from '../src/core.js';
-import { buildCommonUsdtMarkets, chunkTopics, createMarketHub, MAX_MONITORED_SYMBOLS, selectConfirmedSymbols } from '../src/market-hub.js';
+import { applyOrderBookMessage, evaluateAcrossExchanges, evaluatePair, evaluateRoute, topPositive } from '../src/core.js';
+import { buildCommonUsdtMarkets, buildMultiExchangeUniverse, chunkTopics, createMarketHub, MAX_MONITORED_SYMBOLS, selectConfirmedSymbols } from '../src/market-hub.js';
 
 const now = 1_800_000_000_000;
 const book = (bid, ask, qty=1000, ts=now) => ({ bids:[[String(bid),String(qty)]], asks:[[String(ask),String(qty)]], ts });
@@ -118,4 +118,83 @@ test('modo hospedado usa universo Bybit e exige confirmação live implícita pe
   });
   assert.deepEqual(markets.map((x)=>x.symbol), ['ABCUSDT','XYZUSDT']);
   assert.equal(markets[0].identityMethod, 'bybit_catalog+exact_symbol_live_probe_on_binance');
+});
+
+
+test('evaluateAcrossExchanges escolhe a melhor rota entre quatro exchanges', () => {
+  const multiCosts = {
+    exchangeFeePct:{binance:0.1,bybit:0.1,okx:0.4,gate:0.1},
+    reservePct:0.05,
+    recompositionUsdt:0.5,
+  };
+  const r = evaluateAcrossExchanges({
+    symbol:'ABCUSDT',
+    identityConfirmed:true,
+    booksByExchange:{
+      binance:book(99.9,100),
+      bybit:book(101.0,101.1),
+      okx:book(100.4,100.5),
+      gate:book(101.5,101.6),
+    },
+    budgetUsdt:100,
+    costs:multiCosts,
+    rules,
+    now,
+  });
+  assert.equal(r.buyExchange,'binance');
+  assert.equal(r.sellExchange,'gate');
+  assert.ok(r.netPnlUsdt > 0);
+});
+
+test('taxa específica da OKX é aplicada à rota', () => {
+  const multiCosts = {
+    exchangeFeePct:{binance:0.1,bybit:0.1,okx:0.4,gate:0.1},
+    reservePct:0,
+    recompositionUsdt:0,
+  };
+  const r = evaluateRoute({
+    symbol:'ABCUSDT',
+    identityConfirmed:true,
+    buyExchange:'okx',
+    sellExchange:'gate',
+    buyBook:book(99.9,100),
+    sellBook:book(101,101.1),
+    budgetUsdt:100,
+    costs:multiCosts,
+    rules,
+    now,
+  });
+  assert.ok(r.tradingFeesUsdt > 0.49);
+});
+
+test('universo multiexchange une pares USDT ativos sem duplicar símbolo', () => {
+  const markets = buildMultiExchangeUniverse({
+    bybitSymbols:[
+      {symbol:'BTCUSDT',baseCoin:'BTC',quoteCoin:'USDT',status:'Trading'},
+      {symbol:'SOLUSDT',baseCoin:'SOL',quoteCoin:'USDT',status:'Trading'},
+    ],
+    okxSymbols:[
+      {instId:'BTC-USDT',baseCcy:'BTC',quoteCcy:'USDT',state:'live'},
+      {instId:'ETH-USDT',baseCcy:'ETH',quoteCcy:'USDT',state:'live'},
+    ],
+    gateSymbols:[
+      {id:'BTC_USDT',base:'BTC',quote:'USDT',trade_status:'tradable'},
+      {id:'XRP_USDT',base:'XRP',quote:'USDT',trade_status:'tradable'},
+    ],
+  });
+  assert.deepEqual(markets.map((x)=>x.symbol), ['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT']);
+  const btc = markets.find((x)=>x.symbol==='BTCUSDT');
+  assert.equal(btc.catalogVenueCount,3);
+  assert.equal(btc.venues.bybit,true);
+  assert.equal(btc.venues.okx,true);
+  assert.equal(btc.venues.gate,true);
+});
+
+test('market hub seguro expõe as quatro exchanges antes de iniciar', () => {
+  const hub = createMarketHub({ symbols:['BTCUSDT'], gateSymbols:['BTCUSDT'], logger:{info(){},warn(){}} });
+  const snap = hub.snapshot();
+  assert.deepEqual(Object.keys(snap.status), ['binance','bybit','okx','gate']);
+  assert.deepEqual(Object.keys(snap.books), ['binance','bybit','okx','gate']);
+  assert.equal(snap.status.okx.state,'idle');
+  assert.equal(snap.status.gate.state,'idle');
 });
