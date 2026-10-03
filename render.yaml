@@ -3,6 +3,7 @@ services:
     name: radar-cripto-carlos
     runtime: node
     plan: free
+    region: frankfurt
     branch: recovery/site-v16-baseline
     buildCommand: npm ci
     startCommand: npm start
