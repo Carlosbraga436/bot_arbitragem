@@ -2,6 +2,7 @@ import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createMarketHub } from './src/market-hub.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
@@ -10,6 +11,8 @@ const PORT = Number(process.env.PORT || 8787);
 const BINANCE_BASES = ['https://data-api.binance.vision','https://api.binance.com','https://api1.binance.com','https://api2.binance.com'];
 const BYBIT_BASES = ['https://api.bybit.com','https://api.bytick.com'];
 const REQUEST_TIMEOUT_MS = 8_000;
+const marketHub = createMarketHub();
+marketHub.start();
 
 const CANONICAL = [
   ['BTC','Bitcoin'],['ETH','Ethereum'],['SOL','Solana'],['XRP','XRP'],['DOGE','Dogecoin'],
@@ -112,6 +115,13 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/catalog') {
       return json(res, 200, await getCatalog());
     }
+    if (url.pathname === '/api/market') {
+      return json(res, 200, marketHub.snapshot());
+    }
+    if (url.pathname === '/api/reconnect' && req.method === 'POST') {
+      marketHub.reconnect();
+      return json(res, 202, { ok: true, message: 'reconnect_requested' });
+    }
     if (url.pathname === '/api/reference') {
       return json(res, 200, {
         mode: 'public-market-data-only',
@@ -132,6 +142,17 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+for (const signal of ['SIGTERM','SIGINT']) {
+  process.on(signal, () => {
+    marketHub.stop();
+    server.close(() => process.exit(0));
+  });
+}
+
+getCatalog()
+  .then((catalog) => console.log(`[catalog] ${catalog.confirmed}/${catalog.candidates.length} identidades confirmadas via Binance + Bybit REST`))
+  .catch((error) => console.warn('[catalog] preflight falhou:', error?.message || error));
+
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Radar Cripto em http://127.0.0.1:${PORT}`);
+  console.log(`Radar Cripto em 0.0.0.0:${PORT}`);
 });
