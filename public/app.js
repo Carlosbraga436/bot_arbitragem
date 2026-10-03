@@ -12,6 +12,13 @@ const state = {
 const $ = (id) => document.getElementById(id);
 const fmt = (n, d=4) => Number.isFinite(n) ? n.toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d}) : '—';
 const money = (n) => Number.isFinite(n) ? `${n >= 0 ? '+' : ''}${fmt(n,2)} USDT` : '—';
+const exchangeLabel = (name) => ({ binance:'Binance', bybit:'Bybit', okx:'OKX', gate:'Gate.io', kucoin:'KuCoin' }[name] || name || '—');
+const spreadPct = (r) => Number.isFinite(r?.grossPnlUsdt) && Number.isFinite(r?.budgetUsdt) && r.budgetUsdt > 0
+  ? (r.grossPnlUsdt / r.budgetUsdt) * 100
+  : null;
+const directionLabel = (r) => r?.buyExchange && r?.sellExchange
+  ? `${exchangeLabel(r.buyExchange)} → ${exchangeLabel(r.sellExchange)}`
+  : '—';
 
 function setStatus(exchange, kind, text) {
   const el = $(`${exchange}Status`);
@@ -150,11 +157,32 @@ function render() {
   const best = positives[0];
   const bestObserved = nearest[0];
   if (best) {
-    $('best').innerHTML = `<h2>${best.symbol} <span class="profit">${money(best.netPnlUsdt)}</span></h2><p>Comprar ${best.buyExchange} @ ${fmt(best.buyVwap,8)} · vender ${best.sellExchange} @ ${fmt(best.sellVwap,8)} · ROI capital ${fmt(best.roiOnTotalCapitalPct,3)}%</p>`;
+    const grossPct = spreadPct(best);
+    $('bestLabel').textContent = 'MELHOR OPORTUNIDADE ELEGÍVEL';
+    $('best').innerHTML = `
+      <h2>${best.symbol} <span class="profit">${money(best.netPnlUsdt)}</span></h2>
+      <div class="heroRoute">${directionLabel(best)}</div>
+      <div class="heroMetrics">
+        <span><small>Spread bruto</small><b class="pos">${grossPct >= 0 ? '+' : ''}${fmt(grossPct,3)}%</b></span>
+        <span><small>Líquido</small><b class="pos">${money(best.netPnlUsdt)}</b></span>
+        <span><small>ROI capital</small><b class="pos">${fmt(best.roiOnTotalCapitalPct,3)}%</b></span>
+      </div>
+      <p>Comprar em ${exchangeLabel(best.buyExchange)} @ ${fmt(best.buyVwap,8)} · vender em ${exchangeLabel(best.sellExchange)} @ ${fmt(best.sellVwap,8)}</p>`;
   } else if (bestObserved) {
-    const grossPct = (bestObserved.grossPnlUsdt / state.budget) * 100;
-    $('best').innerHTML = `<h2>${bestObserved.symbol}</h2><p>Melhor candidata agora: spread bruto ${grossPct >= 0 ? '+' : ''}${fmt(grossPct,3)}%, líquido ${money(bestObserved.netPnlUsdt)}. Ainda abaixo do breakeven aproximado de ${fmt(breakEvenApproxPct,3)}%.</p>`;
+    const grossPct = spreadPct(bestObserved);
+    const gapPct = Math.max(0, breakEvenApproxPct - grossPct);
+    $('bestLabel').textContent = 'MELHOR CANDIDATA AGORA';
+    $('best').innerHTML = `
+      <h2>${bestObserved.symbol}</h2>
+      <div class="heroRoute">${directionLabel(bestObserved)}</div>
+      <div class="heroMetrics">
+        <span><small>Spread bruto</small><b>${grossPct >= 0 ? '+' : ''}${fmt(grossPct,3)}%</b></span>
+        <span><small>Líquido</small><b class="neg">${money(bestObserved.netPnlUsdt)}</b></span>
+        <span><small>Falta p/ breakeven</small><b>${fmt(gapPct,3)} p.p.</b></span>
+      </div>
+      <p>Comprar em ${exchangeLabel(bestObserved.buyExchange)} @ ${fmt(bestObserved.buyVwap,8)} · vender em ${exchangeLabel(bestObserved.sellExchange)} @ ${fmt(bestObserved.sellVwap,8)}.</p>`;
   } else {
+    $('bestLabel').textContent = 'MELHOR CANDIDATA AGORA';
     $('best').innerHTML = '<h2>—</h2><p>Aguardando pares com cotação recente e liquidez suficiente nas duas exchanges.</p>';
   }
 
@@ -163,10 +191,17 @@ function render() {
   $('rows').innerHTML = shown.length
     ? shown.map((r) => {
         const cls = r.eligible ? 'pos' : 'neg';
-        const status = r.eligible ? 'elegível' : 'não elegível';
-        return `<tr><td><b>${r.symbol}</b></td><td>${r.buyExchange}</td><td>${r.sellExchange}</td><td>${fmt(r.buyVwap,8)}</td><td>${fmt(r.sellVwap,8)}</td><td class="${cls}">${money(r.netPnlUsdt)}</td><td class="${cls}">${fmt(r.roiOnTotalCapitalPct,3)}%</td><td>${status}</td></tr>`;
+        const status = r.eligible ? 'elegível' : 'abaixo do breakeven';
+        const grossPct = spreadPct(r);
+        return `<tr>
+          <td><b>${r.symbol}</b></td>
+          <td><b class="routeText">${directionLabel(r)}</b><small class="priceLine">Compra ${fmt(r.buyVwap,8)} · Venda ${fmt(r.sellVwap,8)}</small></td>
+          <td class="${grossPct >= breakEvenApproxPct ? 'pos' : ''}">${grossPct >= 0 ? '+' : ''}${fmt(grossPct,3)}%</td>
+          <td class="${cls}">${money(r.netPnlUsdt)}</td>
+          <td>${status}</td>
+        </tr>`;
       }).join('')
-    : '<tr><td colspan="8">Nenhum par com dados e liquidez completos neste instante.</td></tr>';
+    : '<tr><td colspan="5">Nenhum par com dados e liquidez completos neste instante.</td></tr>';
 }
 
 for (const btn of document.querySelectorAll('[data-budget]')) {
