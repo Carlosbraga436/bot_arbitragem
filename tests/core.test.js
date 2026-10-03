@@ -221,3 +221,48 @@ test('bloqueia dislocação extrema não validada antes do Top 5', () => {
   assert.equal(r.reason,'price_anomaly_unverified');
   assert.ok(r.grossSpreadPct > 10);
 });
+
+
+test('consenso de 3+ exchanges remove venue isolada com preço divergente', () => {
+  const r = evaluateAcrossExchanges({
+    symbol:'ZILUSDT',
+    identityConfirmed:true,
+    booksByExchange:{
+      binance:book(0.00349,0.00350,100000),
+      bybit:book(0.00348,0.00349,100000),
+      okx:book(0.00318,0.00319,100000),
+      gate:book(0.00350,0.00351,100000),
+    },
+    budgetUsdt:100,
+    costs:{
+      exchangeFeePct:{binance:0.1,bybit:0.1,okx:0.4,gate:0.1},
+      reservePct:0.05,
+      recompositionUsdt:0.5,
+    },
+    rules:{...rules,maxVenueDeviationPct:3,maxUnverifiedGrossSpreadPct:10},
+    now,
+  });
+  assert.notEqual(r.buyExchange,'okx');
+});
+
+test('consenso não bloqueia rota normal entre venues alinhadas', () => {
+  const r = evaluateAcrossExchanges({
+    symbol:'ABCUSDT',
+    identityConfirmed:true,
+    booksByExchange:{
+      binance:book(99.9,100),
+      bybit:book(100.8,100.9),
+      okx:book(100.2,100.3),
+    },
+    budgetUsdt:100,
+    costs:{
+      exchangeFeePct:{binance:0.1,bybit:0.1,okx:0.4},
+      reservePct:0.05,
+      recompositionUsdt:0.5,
+    },
+    rules:{...rules,maxVenueDeviationPct:3,maxUnverifiedGrossSpreadPct:10},
+    now,
+  });
+  assert.equal(r.buyExchange,'binance');
+  assert.equal(r.sellExchange,'bybit');
+});
