@@ -1,9 +1,12 @@
 import { finitePositive } from './core.js';
 
 export const MAX_MONITORED_SYMBOLS = 2400;
-export const BINANCE_STREAMS_PER_SOCKET = 900;
-export const BINANCE_SUBSCRIBE_CHUNK = 180;
-export const GATE_SUBSCRIBE_CHUNK = 80;
+export const BINANCE_STREAMS_PER_SOCKET = 700;
+export const BINANCE_SUBSCRIBE_CHUNK = 50;
+export const BINANCE_SUBSCRIBE_DELAY_MS = 1_100;
+export const GATE_PAIRS_PER_SOCKET = 150;
+export const GATE_SUBSCRIBE_CHUNK = 50;
+export const GATE_SUBSCRIBE_DELAY_MS = 1_000;
 export const AGGREGATE_POLL_MS = 1_000;
 export const KUCOIN_POLL_MS = 4_000;
 export const KUCOIN_MAX_BACKOFF_MS = 30_000;
@@ -223,7 +226,9 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     gateFirstQuoteAt:null,
     kucoinFirstQuoteAt:null,
     binanceSubscribedBatches:0,
+    binanceSocketReconnects:0,
     gateSubscribedBatches:0,
+    gateSocketReconnects:0,
     bybitPollsOk:0,
     bybitPollsFailed:0,
     okxPollsOk:0,
@@ -239,9 +244,12 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     kucoinRestSource:null,
   };
 
-  const sockets = { gate:null };
-  let binanceSockets = [];
-  const reconnectTimers = { binance:null, gate:null };
+  const binanceSockets = new Map();
+  const gateSockets = new Map();
+  const binanceReconnectTimers = new Map();
+  const gateReconnectTimers = new Map();
+  const binanceRetryCounts = new Map();
+  const gateRetryCounts = new Map();
   const timers = new Set();
   let stopped = false;
   let bybitGeneration = 0;
@@ -266,14 +274,6 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     status[exchange] = { state:'connected', last:ts, error:null };
   }
 
-  function scheduleReconnect(exchange, connect) {
-    if (stopped || reconnectTimers[exchange]) return;
-    reconnectTimers[exchange] = setTimeout(() => {
-      reconnectTimers[exchange] = null;
-      connect();
-    }, 2_000);
-  }
-
   function storeBook(exchange, symbol, raw) {
     if (!symbol || !monitoredSet.has(symbol)) return false;
     const sourceTs = Number(raw?.ts);
@@ -285,69 +285,118 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     return true;
   }
 
-  function closeBinanceSockets() {
-    for (const ws of binanceSockets) {
-      try { ws?.close(); } catch {}
+  function openSocketCount(map) {
+    return [...map.values()].filter((ws)=>ws?.readyState===WebSocket.OPEN).length;
+  }
+
+  function clearReconnectMap(map) {
+    for (const timer of map.values()) clearTimeout(timer);
+    map.clear();
+  }
+
+  function closeSocketMap(map) {
+    for (const ws of map.values()) {
+      try {
+        ws.onclose = null;
+        ws.close();
+      } catch {}
     }
-    binanceSockets = [];
+    map.clear();
+  }
+
+  function scheduleBinanceReconnect(streams, socketIndex, total) {
+    if (stopped || binanceReconnectTimers.has(socketIndex)) return;
+    const retry=(binanceRetryCounts.get(socketIndex)||0)+1;
+    binanceRetryCounts.set(socketIndex,retry);
+    diagnostics.binanceSocketReconnects += 1;
+    const delay=Math.min(30_000, 2_000 * (2 ** Math.min(retry-1,4))) + socketIndex*250;
+    const timer=setTimeout(()=>{
+      binanceReconnectTimers.delete(socketIndex);
+      openBinanceSocket(streams,socketIndex,total);
+    },delay);
+    binanceReconnectTimers.set(socketIndex,timer);
+  }
+
+  function openBinanceSocket(streams, socketIndex, total) {
+    if (stopped || !streams.length) return;
+    const previous=binanceSockets.get(socketIndex);
+    if (previous) {
+      try {
+        previous.onclose=null;
+        previous.close();
+      } catch {}
+    }
+
+    const ws=new WebSocket(BINANCE_WS);
+    binanceSockets.set(socketIndex,ws);
+
+    ws.onopen=()=>{
+      logger.info('[market] Binance WS conectado',socketIndex+1,'/',total);
+      chunkTopics(streams,BINANCE_SUBSCRIBE_CHUNK).forEach((params,index)=>{
+        later(()=>{
+          if (ws.readyState!==WebSocket.OPEN) return;
+          ws.send(JSON.stringify({
+            method:'SUBSCRIBE',
+            params,
+            id:(socketIndex*1000)+index+1,
+          }));
+        },index*BINANCE_SUBSCRIBE_DELAY_MS);
+      });
+    };
+
+    ws.onerror=()=>{
+      if (openSocketCount(binanceSockets)===0) setStatus('binance','error','websocket_error');
+    };
+
+    ws.onclose=(event)=>{
+      if (stopped) return;
+      if (binanceSockets.get(socketIndex)===ws) binanceSockets.delete(socketIndex);
+      logger.warn('[market] Binance WS desconectado',socketIndex+1,event?.code);
+      if (openSocketCount(binanceSockets)===0) {
+        setStatus('binance','disconnected',`close_${event?.code ?? 'unknown'}`);
+      } else {
+        status.binance={...status.binance,error:`partial_socket_${socketIndex+1}_down`};
+      }
+      scheduleBinanceReconnect(streams,socketIndex,total);
+    };
+
+    ws.onmessage=(event)=>{
+      try {
+        const msg=parseMessage(event);
+        if (Object.hasOwn(msg||{},'result')&&Object.hasOwn(msg||{},'id')) {
+          if (msg.result===null) diagnostics.binanceSubscribedBatches += 1;
+          return;
+        }
+        const symbol=msg?.s;
+        const ok=storeBook('binance',symbol,{
+          bidPrice:msg.b,bidQty:msg.B,askPrice:msg.a,askQty:msg.A,
+        });
+        if (ok) {
+          binanceRetryCounts.set(socketIndex,0);
+          if (!diagnostics.binanceFirstQuoteAt) {
+            diagnostics.binanceFirstQuoteAt=Date.now();
+            logger.info('[market] Binance primeira cotação',symbol);
+          }
+        }
+      } catch(error) {
+        logger.warn('[market] Binance mensagem inválida',error?.message||error);
+      }
+    };
   }
 
   function connectBinance() {
     if (stopped || !monitored.length) return;
-    closeBinanceSockets();
+    clearReconnectMap(binanceReconnectTimers);
+    closeSocketMap(binanceSockets);
+    binanceRetryCounts.clear();
     setStatus('binance','connecting');
 
-    const streamGroups = chunkTopics(
-      monitored.map((s)=>`${s.toLowerCase()}@bookTicker`),
+    const streamGroups=chunkTopics(
+      monitored.map((symbol)=>`${symbol.toLowerCase()}@bookTicker`),
       BINANCE_STREAMS_PER_SOCKET,
     );
-
-    streamGroups.forEach((streams, socketIndex) => {
-      const ws = new WebSocket(BINANCE_WS);
-      binanceSockets.push(ws);
-
-      ws.onopen = () => {
-        logger.info('[market] Binance WS conectado', socketIndex + 1, '/', streamGroups.length);
-        chunkTopics(streams, BINANCE_SUBSCRIBE_CHUNK).forEach((params,index)=>{
-          later(()=>{
-            if (ws.readyState !== WebSocket.OPEN) return;
-            ws.send(JSON.stringify({
-              method:'SUBSCRIBE',
-              params,
-              id:(socketIndex * 1000) + index + 1,
-            }));
-          }, index * 300);
-        });
-      };
-
-      ws.onerror = () => setStatus('binance','error','websocket_error');
-
-      ws.onclose = (event) => {
-        if (stopped) return;
-        setStatus('binance','disconnected',`close_${event?.code ?? 'unknown'}`);
-        logger.warn('[market] Binance WS desconectado', socketIndex + 1, event?.code);
-        scheduleReconnect('binance', connectBinance);
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = parseMessage(event);
-          if (Object.hasOwn(msg || {},'result') && Object.hasOwn(msg || {},'id')) {
-            if (msg.result === null) diagnostics.binanceSubscribedBatches += 1;
-            return;
-          }
-          const symbol = msg?.s;
-          const ok = storeBook('binance',symbol,{
-            bidPrice:msg.b,bidQty:msg.B,askPrice:msg.a,askQty:msg.A,
-          });
-          if (ok && !diagnostics.binanceFirstQuoteAt) {
-            diagnostics.binanceFirstQuoteAt = Date.now();
-            logger.info('[market] Binance primeira cotação', symbol);
-          }
-        } catch (error) {
-          logger.warn('[market] Binance mensagem inválida', error?.message || error);
-        }
-      };
+    streamGroups.forEach((streams,index)=>{
+      later(()=>openBinanceSocket(streams,index,streamGroups.length),index*500);
     });
   }
 
@@ -510,23 +559,37 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     poll();
   }
 
-  function connectGate() {
-    if (stopped || !gateSet.size) {
-      setStatus('gate','idle','no_symbols');
-      return;
+  function scheduleGateReconnect(pairs, socketIndex, total) {
+    if (stopped || gateReconnectTimers.has(socketIndex)) return;
+    const retry=(gateRetryCounts.get(socketIndex)||0)+1;
+    gateRetryCounts.set(socketIndex,retry);
+    diagnostics.gateSocketReconnects += 1;
+    const delay=Math.min(30_000,2_000*(2 ** Math.min(retry-1,4)))+socketIndex*250;
+    const timer=setTimeout(()=>{
+      gateReconnectTimers.delete(socketIndex);
+      openGateSocket(pairs,socketIndex,total);
+    },delay);
+    gateReconnectTimers.set(socketIndex,timer);
+  }
+
+  function openGateSocket(pairs, socketIndex, total) {
+    if (stopped || !pairs.length) return;
+    const previous=gateSockets.get(socketIndex);
+    if (previous) {
+      try {
+        previous.onclose=null;
+        previous.close();
+      } catch {}
     }
-    try { sockets.gate?.close(); } catch {}
-    setStatus('gate','connecting');
 
-    const ws = new WebSocket(GATE_WS);
-    sockets.gate = ws;
+    const ws=new WebSocket(GATE_WS);
+    gateSockets.set(socketIndex,ws);
 
-    ws.onopen = () => {
-      logger.info('[market] Gate WS conectado; assinando spot.book_ticker');
-      const pairs = [...gateSet].map((symbol)=>`${symbol.slice(0,-4)}_USDT`);
+    ws.onopen=()=>{
+      logger.info('[market] Gate WS conectado',socketIndex+1,'/',total);
       chunkTopics(pairs,GATE_SUBSCRIBE_CHUNK).forEach((payload,index)=>{
         later(()=>{
-          if (ws.readyState !== WebSocket.OPEN) return;
+          if (ws.readyState!==WebSocket.OPEN) return;
           ws.send(JSON.stringify({
             time:Math.floor(Date.now()/1000),
             channel:'spot.book_ticker',
@@ -534,39 +597,70 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
             payload,
           }));
           diagnostics.gateSubscribedBatches += 1;
-        }, index * 250);
+        },index*GATE_SUBSCRIBE_DELAY_MS);
       });
     };
-    ws.onerror = () => setStatus('gate','error','websocket_error');
-    ws.onclose = (event) => {
-      setStatus('gate','disconnected',`close_${event?.code ?? 'unknown'}`);
-      logger.warn('[market] Gate WS desconectado',event?.code);
-      scheduleReconnect('gate',connectGate);
+
+    ws.onerror=()=>{
+      if (openSocketCount(gateSockets)===0) setStatus('gate','error','websocket_error');
     };
-    ws.onmessage = (event) => {
+
+    ws.onclose=(event)=>{
+      if (stopped) return;
+      if (gateSockets.get(socketIndex)===ws) gateSockets.delete(socketIndex);
+      logger.warn('[market] Gate WS desconectado',socketIndex+1,event?.code);
+      if (openSocketCount(gateSockets)===0) {
+        setStatus('gate','disconnected',`close_${event?.code ?? 'unknown'}`);
+      } else {
+        status.gate={...status.gate,error:`partial_socket_${socketIndex+1}_down`};
+      }
+      scheduleGateReconnect(pairs,socketIndex,total);
+    };
+
+    ws.onmessage=(event)=>{
       try {
-        const msg = parseMessage(event);
-        if (msg?.channel !== 'spot.book_ticker' || msg?.event !== 'update') return;
-        const raw = msg.result;
-        const pair = String(raw?.s || '');
+        const msg=parseMessage(event);
+        if (msg?.channel!=='spot.book_ticker'||msg?.event!=='update') return;
+        const raw=msg.result;
+        const pair=String(raw?.s||'');
         if (!pair.endsWith('_USDT')) return;
-        const symbol = canonicalSymbol(pair.slice(0,-5));
-        const ok = storeBook('gate',symbol,{
+        const symbol=canonicalSymbol(pair.slice(0,-5));
+        const ok=storeBook('gate',symbol,{
           bidPrice:raw?.b,bidQty:raw?.B,
           askPrice:raw?.a,askQty:raw?.A,
-          ts:Number(msg?.time_ms) || (Number(msg?.time) ? Number(msg.time) * 1000 : Date.now()),
+          ts:Number(raw?.t)||Number(msg?.time_ms)||(Number(msg?.time)?Number(msg.time)*1000:Date.now()),
         });
         if (ok) {
+          gateRetryCounts.set(socketIndex,0);
           diagnostics.gateQuoteCount += 1;
           if (!diagnostics.gateFirstQuoteAt) {
-            diagnostics.gateFirstQuoteAt = Date.now();
+            diagnostics.gateFirstQuoteAt=Date.now();
             logger.info('[market] Gate primeira cotação',symbol);
           }
         }
-      } catch (error) {
-        logger.warn('[market] Gate mensagem inválida',error?.message || error);
+      } catch(error) {
+        logger.warn('[market] Gate mensagem inválida',error?.message||error);
       }
     };
+  }
+
+  function connectGate() {
+    if (stopped || !gateSet.size) {
+      setStatus('gate','idle','no_symbols');
+      return;
+    }
+    clearReconnectMap(gateReconnectTimers);
+    closeSocketMap(gateSockets);
+    gateRetryCounts.clear();
+    setStatus('gate','connecting');
+
+    const pairGroups=chunkTopics(
+      [...gateSet].map((symbol)=>`${symbol.slice(0,-4)}_USDT`),
+      GATE_PAIRS_PER_SOCKET,
+    );
+    pairGroups.forEach((pairs,index)=>{
+      later(()=>openGateSocket(pairs,index,pairGroups.length),index*500);
+    });
   }
 
   function start() {
@@ -585,14 +679,10 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     kucoinGeneration += 1;
     for (const timer of timers) clearTimeout(timer);
     timers.clear();
-    for (const key of Object.keys(reconnectTimers)) {
-      if (reconnectTimers[key]) clearTimeout(reconnectTimers[key]);
-      reconnectTimers[key] = null;
-    }
-    closeBinanceSockets();
-    for (const ws of Object.values(sockets)) {
-      try { ws?.close(); } catch {}
-    }
+    clearReconnectMap(binanceReconnectTimers);
+    clearReconnectMap(gateReconnectTimers);
+    closeSocketMap(binanceSockets);
+    closeSocketMap(gateSockets);
   }
 
   function reconnect() {
@@ -601,10 +691,10 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     kucoinGeneration += 1;
     for (const timer of timers) clearTimeout(timer);
     timers.clear();
-    closeBinanceSockets();
-    for (const ws of Object.values(sockets)) {
-      try { ws?.close(); } catch {}
-    }
+    clearReconnectMap(binanceReconnectTimers);
+    clearReconnectMap(gateReconnectTimers);
+    closeSocketMap(binanceSockets);
+    closeSocketMap(gateSockets);
     later(()=>{
       if (!stopped) {
         connectBinance();
