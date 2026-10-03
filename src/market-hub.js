@@ -1,17 +1,19 @@
 import { finitePositive } from './core.js';
 
 export const MAX_MONITORED_SYMBOLS = 2400;
-export const BINANCE_STREAMS_PER_SOCKET = 700;
-export const BINANCE_SUBSCRIBE_CHUNK = 50;
-export const BINANCE_SUBSCRIBE_DELAY_MS = 1_100;
+export const BINANCE_DISCOVERY_STREAM = '!miniTicker@arr';
+export const BINANCE_SUBSCRIBE_CHUNK = 40;
+export const BINANCE_SUBSCRIBE_DELAY_MS = 1_200;
 export const GATE_PAIRS_PER_SOCKET = 150;
 export const GATE_SUBSCRIBE_CHUNK = 50;
 export const GATE_SUBSCRIBE_DELAY_MS = 1_000;
+export const GATE_HEARTBEAT_MS = 10_000;
 export const AGGREGATE_POLL_MS = 1_000;
 export const KUCOIN_POLL_MS = 4_000;
 export const KUCOIN_MAX_BACKOFF_MS = 30_000;
 
 const BINANCE_WS = 'wss://stream.binance.com:443/ws';
+const BINANCE_DISCOVERY_WS = `${BINANCE_WS}/${BINANCE_DISCOVERY_STREAM}`;
 const GATE_WS = 'wss://api.gateio.ws/ws/v4/';
 const BYBIT_REST_BASES = ['https://api.bybit.com','https://api.bytick.com'];
 const OKX_REST_BASES = ['https://www.okx.com','https://openapi.okx.com'];
@@ -22,6 +24,15 @@ export function chunkTopics(items, size = 10) {
   const out = [];
   for (let i = 0; i < items.length; i += n) out.push(items.slice(i, i + n));
   return out;
+}
+
+export function selectDiscoveredBinanceSymbols(events = [], monitoredSymbols = []) {
+  const monitoredSet = monitoredSymbols instanceof Set ? monitoredSymbols : new Set(monitoredSymbols);
+  return [...new Set(
+    (Array.isArray(events) ? events : [])
+      .map((x)=>String(x?.s || '').toUpperCase())
+      .filter((symbol)=>symbol.endsWith('USDT') && monitoredSet.has(symbol))
+  )];
 }
 
 function canonicalSymbol(base, quote = 'USDT') {
@@ -227,6 +238,8 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     kucoinFirstQuoteAt:null,
     binanceSubscribedBatches:0,
     binanceSocketReconnects:0,
+    binanceDiscoveredSymbols:0,
+    binanceSubscribedSymbols:0,
     gateSubscribedBatches:0,
     gateSocketReconnects:0,
     bybitPollsOk:0,
@@ -250,6 +263,11 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
   const gateReconnectTimers = new Map();
   const binanceRetryCounts = new Map();
   const gateRetryCounts = new Map();
+  const binanceKnownSymbols = new Set();
+  const binanceSubscribedSymbols = new Set();
+  const binanceSubscriptionQueue = new Set();
+  const gateHeartbeatTimers = new Map();
+  let binancePumpScheduled = false;
   const timers = new Set();
   let stopped = false;
   let bybitGeneration = 0;
@@ -304,60 +322,99 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     map.clear();
   }
 
-  function scheduleBinanceReconnect(streams, socketIndex, total) {
-    if (stopped || binanceReconnectTimers.has(socketIndex)) return;
-    const retry=(binanceRetryCounts.get(socketIndex)||0)+1;
-    binanceRetryCounts.set(socketIndex,retry);
-    diagnostics.binanceSocketReconnects += 1;
-    const delay=Math.min(30_000, 2_000 * (2 ** Math.min(retry-1,4))) + socketIndex*250;
-    const timer=setTimeout(()=>{
-      binanceReconnectTimers.delete(socketIndex);
-      openBinanceSocket(streams,socketIndex,total);
-    },delay);
-    binanceReconnectTimers.set(socketIndex,timer);
+  function clearGateHeartbeats() {
+    for (const timer of gateHeartbeatTimers.values()) clearInterval(timer);
+    gateHeartbeatTimers.clear();
   }
 
-  function openBinanceSocket(streams, socketIndex, total) {
-    if (stopped || !streams.length) return;
-    const previous=binanceSockets.get(socketIndex);
+  function scheduleBinanceReconnect(kind, connect) {
+    if (stopped || binanceReconnectTimers.has(kind)) return;
+    const retry=(binanceRetryCounts.get(kind)||0)+1;
+    binanceRetryCounts.set(kind,retry);
+    diagnostics.binanceSocketReconnects += 1;
+    const delay=Math.min(30_000,2_000*(2 ** Math.min(retry-1,4)));
+    const timer=setTimeout(()=>{
+      binanceReconnectTimers.delete(kind);
+      connect();
+    },delay);
+    binanceReconnectTimers.set(kind,timer);
+  }
+
+  function queueBinanceSymbols(symbols) {
+    for (const symbol of symbols) {
+      if (!monitoredSet.has(symbol) || binanceSubscribedSymbols.has(symbol)) continue;
+      binanceSubscriptionQueue.add(symbol);
+    }
+    diagnostics.binanceDiscoveredSymbols = binanceKnownSymbols.size;
+    pumpBinanceSubscriptions();
+  }
+
+  function pumpBinanceSubscriptions() {
+    if (stopped || binancePumpScheduled || !binanceSubscriptionQueue.size) return;
+    const ws=binanceSockets.get('book');
+    if (!ws || ws.readyState!==WebSocket.OPEN) return;
+
+    binancePumpScheduled=true;
+    const params=[...binanceSubscriptionQueue]
+      .slice(0,BINANCE_SUBSCRIBE_CHUNK)
+      .map((symbol)=>`${symbol.toLowerCase()}@bookTicker`);
+    const symbols=params.map((stream)=>stream.slice(0,-'@bookTicker'.length).toUpperCase());
+
+    try {
+      ws.send(JSON.stringify({
+        method:'SUBSCRIBE',
+        params,
+        id:Date.now()%2_000_000_000,
+      }));
+      for (const symbol of symbols) {
+        binanceSubscriptionQueue.delete(symbol);
+        binanceSubscribedSymbols.add(symbol);
+      }
+      diagnostics.binanceSubscribedSymbols=binanceSubscribedSymbols.size;
+    } catch(error) {
+      logger.warn('[market] Binance subscribe send falhou',error?.message||error);
+    }
+
+    later(()=>{
+      binancePumpScheduled=false;
+      pumpBinanceSubscriptions();
+    },BINANCE_SUBSCRIBE_DELAY_MS);
+  }
+
+  function openBinanceBookSocket() {
+    if (stopped) return;
+    const previous=binanceSockets.get('book');
     if (previous) {
-      try {
-        previous.onclose=null;
-        previous.close();
-      } catch {}
+      try { previous.onclose=null; previous.close(); } catch {}
     }
 
     const ws=new WebSocket(BINANCE_WS);
-    binanceSockets.set(socketIndex,ws);
+    binanceSockets.set('book',ws);
 
     ws.onopen=()=>{
-      logger.info('[market] Binance WS conectado',socketIndex+1,'/',total);
-      chunkTopics(streams,BINANCE_SUBSCRIBE_CHUNK).forEach((params,index)=>{
-        later(()=>{
-          if (ws.readyState!==WebSocket.OPEN) return;
-          ws.send(JSON.stringify({
-            method:'SUBSCRIBE',
-            params,
-            id:(socketIndex*1000)+index+1,
-          }));
-        },index*BINANCE_SUBSCRIBE_DELAY_MS);
-      });
+      logger.info('[market] Binance bookTicker WS conectado');
+      binanceRetryCounts.set('book',0);
+      binanceSubscribedSymbols.clear();
+      diagnostics.binanceSubscribedSymbols=0;
+      queueBinanceSymbols(binanceKnownSymbols);
     };
 
     ws.onerror=()=>{
-      if (openSocketCount(binanceSockets)===0) setStatus('binance','error','websocket_error');
+      if (!books.binance.size) setStatus('binance','error','book_websocket_error');
     };
 
     ws.onclose=(event)=>{
+      const heartbeat=gateHeartbeatTimers.get(socketIndex);
+      if (heartbeat) clearInterval(heartbeat);
+      gateHeartbeatTimers.delete(socketIndex);
       if (stopped) return;
-      if (binanceSockets.get(socketIndex)===ws) binanceSockets.delete(socketIndex);
-      logger.warn('[market] Binance WS desconectado',socketIndex+1,event?.code);
-      if (openSocketCount(binanceSockets)===0) {
-        setStatus('binance','disconnected',`close_${event?.code ?? 'unknown'}`);
-      } else {
-        status.binance={...status.binance,error:`partial_socket_${socketIndex+1}_down`};
-      }
-      scheduleBinanceReconnect(streams,socketIndex,total);
+      if (binanceSockets.get('book')===ws) binanceSockets.delete('book');
+      logger.warn('[market] Binance bookTicker WS desconectado',event?.code);
+      binanceSubscribedSymbols.clear();
+      diagnostics.binanceSubscribedSymbols=0;
+      for (const symbol of binanceKnownSymbols) binanceSubscriptionQueue.add(symbol);
+      if (!books.binance.size) setStatus('binance','disconnected',`book_close_${event?.code ?? 'unknown'}`);
+      scheduleBinanceReconnect('book',openBinanceBookSocket);
     };
 
     ws.onmessage=(event)=>{
@@ -367,19 +424,64 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
           if (msg.result===null) diagnostics.binanceSubscribedBatches += 1;
           return;
         }
+        if (msg?.code != null) {
+          logger.warn('[market] Binance subscribe erro',msg.code,msg.msg||'');
+          return;
+        }
         const symbol=msg?.s;
         const ok=storeBook('binance',symbol,{
           bidPrice:msg.b,bidQty:msg.B,askPrice:msg.a,askQty:msg.A,
         });
-        if (ok) {
-          binanceRetryCounts.set(socketIndex,0);
-          if (!diagnostics.binanceFirstQuoteAt) {
-            diagnostics.binanceFirstQuoteAt=Date.now();
-            logger.info('[market] Binance primeira cotação',symbol);
-          }
+        if (ok && !diagnostics.binanceFirstQuoteAt) {
+          diagnostics.binanceFirstQuoteAt=Date.now();
+          logger.info('[market] Binance primeira cotação',symbol);
         }
       } catch(error) {
         logger.warn('[market] Binance mensagem inválida',error?.message||error);
+      }
+    };
+  }
+
+  function openBinanceDiscoverySocket() {
+    if (stopped) return;
+    const previous=binanceSockets.get('discovery');
+    if (previous) {
+      try { previous.onclose=null; previous.close(); } catch {}
+    }
+
+    const ws=new WebSocket(BINANCE_DISCOVERY_WS);
+    binanceSockets.set('discovery',ws);
+
+    ws.onopen=()=>{
+      logger.info('[market] Binance discovery WS conectado',BINANCE_DISCOVERY_STREAM);
+      binanceRetryCounts.set('discovery',0);
+    };
+
+    ws.onerror=()=>{
+      if (!books.binance.size) setStatus('binance','error','discovery_websocket_error');
+    };
+
+    ws.onclose=(event)=>{
+      if (stopped) return;
+      if (binanceSockets.get('discovery')===ws) binanceSockets.delete('discovery');
+      logger.warn('[market] Binance discovery WS desconectado',event?.code);
+      scheduleBinanceReconnect('discovery',openBinanceDiscoverySocket);
+    };
+
+    ws.onmessage=(event)=>{
+      try {
+        const payload=parseMessage(event);
+        const discovered=selectDiscoveredBinanceSymbols(payload,monitoredSet);
+        const fresh=[];
+        for (const symbol of discovered) {
+          if (!binanceKnownSymbols.has(symbol)) {
+            binanceKnownSymbols.add(symbol);
+            fresh.push(symbol);
+          }
+        }
+        if (fresh.length) queueBinanceSymbols(fresh);
+      } catch(error) {
+        logger.warn('[market] Binance discovery mensagem inválida',error?.message||error);
       }
     };
   }
@@ -389,15 +491,14 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     clearReconnectMap(binanceReconnectTimers);
     closeSocketMap(binanceSockets);
     binanceRetryCounts.clear();
+    binanceKnownSymbols.clear();
+    binanceSubscribedSymbols.clear();
+    binanceSubscriptionQueue.clear();
+    diagnostics.binanceDiscoveredSymbols=0;
+    diagnostics.binanceSubscribedSymbols=0;
     setStatus('binance','connecting');
-
-    const streamGroups=chunkTopics(
-      monitored.map((symbol)=>`${symbol.toLowerCase()}@bookTicker`),
-      BINANCE_STREAMS_PER_SOCKET,
-    );
-    streamGroups.forEach((streams,index)=>{
-      later(()=>openBinanceSocket(streams,index,streamGroups.length),index*500);
-    });
+    openBinanceDiscoverySocket();
+    later(openBinanceBookSocket,500);
   }
 
   async function fetchBybitSnapshot() {
@@ -587,6 +688,17 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
 
     ws.onopen=()=>{
       logger.info('[market] Gate WS conectado',socketIndex+1,'/',total);
+      const oldHeartbeat=gateHeartbeatTimers.get(socketIndex);
+      if (oldHeartbeat) clearInterval(oldHeartbeat);
+      gateHeartbeatTimers.set(socketIndex,setInterval(()=>{
+        if (ws.readyState!==WebSocket.OPEN) return;
+        try {
+          ws.send(JSON.stringify({
+            time:Math.floor(Date.now()/1000),
+            channel:'spot.ping',
+          }));
+        } catch {}
+      },GATE_HEARTBEAT_MS));
       chunkTopics(pairs,GATE_SUBSCRIBE_CHUNK).forEach((payload,index)=>{
         later(()=>{
           if (ws.readyState!==WebSocket.OPEN) return;
@@ -620,6 +732,7 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     ws.onmessage=(event)=>{
       try {
         const msg=parseMessage(event);
+        if (msg?.channel==='spot.pong') return;
         if (msg?.channel!=='spot.book_ticker'||msg?.event!=='update') return;
         const raw=msg.result;
         const pair=String(raw?.s||'');
@@ -650,6 +763,7 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
       return;
     }
     clearReconnectMap(gateReconnectTimers);
+    clearGateHeartbeats();
     closeSocketMap(gateSockets);
     gateRetryCounts.clear();
     setStatus('gate','connecting');
@@ -681,6 +795,7 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     timers.clear();
     clearReconnectMap(binanceReconnectTimers);
     clearReconnectMap(gateReconnectTimers);
+    clearGateHeartbeats();
     closeSocketMap(binanceSockets);
     closeSocketMap(gateSockets);
   }
