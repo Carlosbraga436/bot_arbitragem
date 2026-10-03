@@ -88,10 +88,11 @@ function renderRadar(data) {
       <div class="heroRoute">${directionLabel(best)}</div>
       <div class="heroMetrics">
         <span><small>Spread bruto</small><b class="${eligible?'pos':''}">${grossPct>=0?'+':''}${fmt(grossPct,3)}%</b></span>
-        <span><small>Líquido</small><b class="${eligible?'pos':'neg'}">${money(best.netPnlUsdt)}</b></span>
-        <span><small>${eligible?'Breakeven rota':'Falta p/ breakeven'}</small><b>${eligible?fmt(breakEven,3)+'%':fmt(gapPct,3)+' p.p.'}</b></span>
+        <span><small>Líquido execução</small><b class="${eligible?'pos':'neg'}">${money(best.netPnlUsdt)}</b></span>
+        <span><small>Após recomposição</small><b class="${Number(best.netAfterRebalanceUsdt)>=0?'pos':'neg'}">${money(best.netAfterRebalanceUsdt)}</b></span>
+        <span><small>${eligible?'Breakeven execução':'Falta p/ breakeven'}</small><b>${eligible?fmt(breakEven,3)+'%':fmt(gapPct,3)+' p.p.'}</b></span>
       </div>
-      <p>Comprar em ${exchangeLabel(best.buyExchange)} @ ${fmt(best.buyVwap,8)} · vender em ${exchangeLabel(best.sellExchange)} @ ${fmt(best.sellVwap,8)} · ROI capital ${fmt(best.roiOnTotalCapitalPct,3)}%.</p>`;
+      <p>Comprar em ${exchangeLabel(best.buyExchange)} @ ${fmt(best.buyVwap,8)} · vender em ${exchangeLabel(best.sellExchange)} @ ${fmt(best.sellVwap,8)} · ROI da execução ${fmt(best.roiOnTotalCapitalPct,3)}%. A recomposição é estimada separadamente e não bloqueia a oportunidade executável.</p>`;
   } else {
     $('bestLabel').textContent='MELHOR CANDIDATA AGORA';
     $('best').innerHTML='<h2>—</h2><p>Aguardando pares com cotação recente e liquidez suficiente em pelo menos duas exchanges.</p>';
@@ -112,8 +113,8 @@ function renderRadar(data) {
           <td><b>${r.symbol}</b></td>
           <td><b class="routeText">${directionLabel(r)}</b><small class="priceLine">Compra ${fmt(r.buyVwap,8)} · Venda ${fmt(r.sellVwap,8)}</small></td>
           <td class="${eligible?'pos':''}">${grossPct>=0?'+':''}${fmt(grossPct,3)}%</td>
-          <td class="${cls}">${money(r.netPnlUsdt)}</td>
-          <td>${eligible?'elegível':`breakeven ${fmt(breakEven,3)}%`}</td>
+          <td class="${cls}">${money(r.netPnlUsdt)}<small class="priceLine">Pós-rebalance ${money(r.netAfterRebalanceUsdt)}</small></td>
+          <td>${eligible?'elegível agora':`breakeven ${fmt(breakEven,3)}%`}</td>
         </tr>`;
       }).join('')
     : '<tr><td colspan="5">Nenhum par com dados e liquidez completos neste instante.</td></tr>';
