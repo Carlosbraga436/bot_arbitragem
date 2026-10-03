@@ -5,7 +5,8 @@ export const BINANCE_STREAMS_PER_SOCKET = 900;
 export const BINANCE_SUBSCRIBE_CHUNK = 180;
 export const GATE_SUBSCRIBE_CHUNK = 80;
 export const AGGREGATE_POLL_MS = 1_000;
-export const KUCOIN_POLL_MS = 2_000;
+export const KUCOIN_POLL_MS = 4_000;
+export const KUCOIN_MAX_BACKOFF_MS = 30_000;
 
 const BINANCE_WS = 'wss://stream.binance.com:443/ws';
 const GATE_WS = 'wss://api.gateio.ws/ws/v4/';
@@ -246,6 +247,7 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
   let bybitGeneration = 0;
   let okxGeneration = 0;
   let kucoinGeneration = 0;
+  let kucoinNextPollMs = KUCOIN_POLL_MS;
 
   function later(fn, delay) {
     const timer = setTimeout(() => {
@@ -487,6 +489,7 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
         diagnostics.kucoinPollsOk += 1;
         diagnostics.kucoinLastPollCount = count;
         diagnostics.kucoinRestSource = result.base;
+        kucoinNextPollMs = KUCOIN_POLL_MS;
         if (count > 0 && !diagnostics.kucoinFirstQuoteAt) {
           diagnostics.kucoinFirstQuoteAt = Date.now();
           logger.info('[market] KuCoin primeiro snapshot agregado',count,'pares');
@@ -495,9 +498,13 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
       } catch (error) {
         diagnostics.kucoinPollsFailed += 1;
         setStatus('kucoin','error',error?.message || 'rest_poll_failed');
-        logger.warn('[market] KuCoin snapshot falhou',error?.message || error);
+        const isRateLimit = String(error?.message || '').includes('HTTP 429');
+        kucoinNextPollMs = isRateLimit
+          ? Math.min(Math.max(kucoinNextPollMs * 2, 10_000), KUCOIN_MAX_BACKOFF_MS)
+          : Math.min(Math.max(kucoinNextPollMs, KUCOIN_POLL_MS), 10_000);
+        logger.warn('[market] KuCoin snapshot falhou',error?.message || error,'retry_ms',kucoinNextPollMs);
       } finally {
-        if (!stopped && generation === kucoinGeneration) later(poll,KUCOIN_POLL_MS);
+        if (!stopped && generation === kucoinGeneration) later(poll,kucoinNextPollMs);
       }
     };
     poll();
