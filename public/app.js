@@ -4,6 +4,7 @@ const state = {
   budget: 100,
   catalog: [],
   monitored: [],
+  commonActiveUsdt: 0,
   books: { binance: new Map(), bybit: new Map() },
   pollTimer: null,
 };
@@ -41,15 +42,6 @@ function applyStatus(exchange, remote) {
     return;
   }
   setStatus(exchange, 'bad', 'Indisponível');
-}
-
-function scoreCandidates(candidates) {
-  const preferred = ['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT','DOGEUSDT','ADAUSDT','AVAXUSDT','LINKUSDT','BCHUSDT','LTCUSDT','DOTUSDT','TRXUSDT','TONUSDT','SHIBUSDT','NEARUSDT'];
-  return [...candidates].sort((a,b) => {
-    const ai = preferred.indexOf(a.symbol), bi = preferred.indexOf(b.symbol);
-    const av = ai === -1 ? 999 : ai, bv = bi === -1 ? 999 : bi;
-    return av - bv || a.symbol.localeCompare(b.symbol);
-  });
 }
 
 function ingestBooks(exchange, incoming = {}) {
@@ -104,17 +96,16 @@ async function bootstrap() {
 
   const data = await r.json();
   state.catalog = data.candidates || [];
-  const confirmed = scoreCandidates(state.catalog.filter((x)=>x.identityConfirmed));
+  state.commonActiveUsdt = Number(data?.exchangeUniverse?.commonActiveUsdt) || state.catalog.length;
+
   const bySymbol = new Map(state.catalog.map((x) => [x.symbol, x]));
-  const runtimeSymbols = Array.isArray(data.monitoredSymbols) && data.monitoredSymbols.length
-    ? data.monitoredSymbols
-    : confirmed.slice(0,15).map((x)=>x.symbol);
+  const runtimeSymbols = Array.isArray(data.monitoredSymbols) ? data.monitoredSymbols : [];
   state.monitored = runtimeSymbols.map((symbol) => bySymbol.get(symbol)).filter(Boolean);
 
-  $('identity').textContent = `${confirmed.length}/${state.catalog.length} identidades`;
-  $('summary').textContent = `${state.monitored.length} monitoradas · ${state.catalog.length} candidatas · somente identidades confirmadas`;
+  $('identity').textContent = `${state.monitored.length} pares`;
+  $('summary').textContent = `${state.monitored.length} monitoradas de ${state.commonActiveUsdt} pares USDT comuns`;
 
-  if (!state.monitored.length) throw new Error('Nenhum par comum confirmado nos catálogos.');
+  if (!state.monitored.length) throw new Error('Nenhum par spot USDT comum confirmado nos catálogos.');
 
   await startPolling();
 }
@@ -136,19 +127,19 @@ function currentResults() {
 function render() {
   const results = currentResults();
   const positives = topPositive(results,5);
-  const comparable = results.filter((r)=>r.reason !== 'invalid_data' && !['stale_data','desynced_data'].includes(r.reason)).length;
-  $('summary').textContent = `${state.monitored.length} monitoradas · ${comparable} comparáveis agora · ${positives.length} positivas elegíveis`;
+  const liquidComparable = results.filter((r) => Number.isFinite(r?.netPnlUsdt)).length;
+
+  $('summary').textContent =
+    `${state.monitored.length} monitoradas · ${liquidComparable} com liquidez suficiente agora · ${positives.length} positivas elegíveis`;
 
   const best = positives[0];
   $('best').innerHTML = best
     ? `<h2>${best.symbol} <span class="profit">${money(best.netPnlUsdt)}</span></h2><p>Comprar ${best.buyExchange} @ ${fmt(best.buyVwap,8)} · vender ${best.sellExchange} @ ${fmt(best.sellVwap,8)} · ROI capital ${fmt(best.roiOnTotalCapitalPct,3)}%</p>`
-    : '<h2>—</h2><p>Nenhuma estimativa positiva elegível no momento.</p>';
+    : '<h2>—</h2><p>Nenhuma oportunidade líquida positiva com liquidez suficiente no momento.</p>';
 
-  const rows = [...results].sort((a,b)=>(b.netPnlUsdt??-Infinity)-(a.netPnlUsdt??-Infinity));
-  $('rows').innerHTML = rows.map((r)=>{
-    const cls = r.eligible ? 'pos' : (Number.isFinite(r.netPnlUsdt) ? 'neg' : 'muted');
-    return `<tr><td><b>${r.symbol}</b></td><td>${r.buyExchange || '—'}</td><td>${r.sellExchange || '—'}</td><td>${fmt(r.buyVwap,8)}</td><td>${fmt(r.sellVwap,8)}</td><td class="${cls}">${money(r.netPnlUsdt)}</td><td class="${cls}">${Number.isFinite(r.roiOnTotalCapitalPct)?fmt(r.roiOnTotalCapitalPct,3)+'%':'—'}</td><td>${r.reason}</td></tr>`;
-  }).join('') || '<tr><td colspan="8">Aguardando catálogo.</td></tr>';
+  $('rows').innerHTML = positives.length
+    ? positives.map((r) => `<tr><td><b>${r.symbol}</b></td><td>${r.buyExchange}</td><td>${r.sellExchange}</td><td>${fmt(r.buyVwap,8)}</td><td>${fmt(r.sellVwap,8)}</td><td class="pos">${money(r.netPnlUsdt)}</td><td class="pos">${fmt(r.roiOnTotalCapitalPct,3)}%</td><td>elegível</td></tr>`).join('')
+    : '<tr><td colspan="8">Nenhuma oportunidade líquida positiva elegível agora.</td></tr>';
 }
 
 for (const btn of document.querySelectorAll('[data-budget]')) {
