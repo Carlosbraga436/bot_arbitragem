@@ -8,7 +8,13 @@ import {
   MAX_MONITORED_SYMBOLS,
   selectConfirmedSymbols,
 } from './src/market-hub.js';
-import { DEFAULT_COSTS, DEFAULT_RULES, evaluateAcrossExchanges } from './src/core.js';
+import {
+  DEFAULT_COSTS,
+  DEFAULT_RULES,
+  evaluateAcrossExchanges,
+  exchangeFeePct,
+  topPositive,
+} from './src/core.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
@@ -20,6 +26,7 @@ const GATE_BASES = ['https://api.gateio.ws/api/v4'];
 const KUCOIN_BASES = ['https://api.kucoin.com'];
 const REQUEST_TIMEOUT_MS = 10_000;
 const APP_VERSION = '0.19.0-recovery.1';
+const RADAR_CACHE_MS = 750;
 
 let runtimePromise = null;
 
@@ -179,7 +186,13 @@ async function ensureRuntime() {
         `[catalog] ${catalog.exchangeUniverse.candidateUsdt} candidatos USDT; monitorando ${catalog.monitoredSymbols.length}; Gate ${catalog.gateSymbols.length}; KuCoin ${catalog.kucoinSymbols.length}`
       );
 
-      const runtime={catalog,marketHub};
+      const runtime={
+        catalog,
+        marketHub,
+        bySymbol:new Map(catalog.candidates.map((x)=>[x.symbol,x])),
+        radarCache:new Map(),
+      };
+
       setTimeout(()=>{
         try {
           for (const budget of [100,500,1000]) {
@@ -199,27 +212,30 @@ async function ensureRuntime() {
   return runtimePromise;
 }
 
-function marketDiagnostics(runtime,budgetUsdt=100) {
+function costsForAsset(asset) {
+  return {
+    ...DEFAULT_COSTS,
+    exchangeFeePct:{
+      ...DEFAULT_COSTS.exchangeFeePct,
+      ...(asset?.feePctByExchange || {}),
+    },
+  };
+}
+
+function evaluateRuntime(runtime,budgetUsdt=100) {
   const snap=runtime.marketHub.snapshot();
-  const bySymbol=new Map(runtime.catalog.candidates.map((x)=>[x.symbol,x]));
   const now=Date.now();
   const exchanges=Object.keys(snap.books);
 
   const results=snap.symbols.map((symbol)=>{
-    const asset=bySymbol.get(symbol);
+    const asset=runtime.bySymbol.get(symbol);
     const booksByExchange=Object.fromEntries(
       exchanges
         .map((exchange)=>[exchange,snap.books[exchange]?.[symbol]])
         .filter(([,book])=>book)
     );
-    const costs={
-      ...DEFAULT_COSTS,
-      exchangeFeePct:{
-        ...DEFAULT_COSTS.exchangeFeePct,
-        ...(asset?.feePctByExchange || {}),
-      },
-    };
-    return evaluateAcrossExchanges({
+    const costs=costsForAsset(asset);
+    const result=evaluateAcrossExchanges({
       symbol,
       identityConfirmed:Boolean(asset?.identityConfirmed),
       booksByExchange,
@@ -228,34 +244,99 @@ function marketDiagnostics(runtime,budgetUsdt=100) {
       rules:DEFAULT_RULES,
       now,
     });
+
+    if (Number.isFinite(result?.netPnlUsdt) && result?.buyExchange && result?.sellExchange) {
+      result.breakEvenPct=
+        exchangeFeePct(result.buyExchange,costs)
+        + exchangeFeePct(result.sellExchange,costs)
+        + (costs.reservePct*2)
+        + ((costs.recompositionUsdt/budgetUsdt)*100);
+    }
+    return result;
   });
 
-  const reasonCounts={};
-  for (const r of results) reasonCounts[r.reason]=(reasonCounts[r.reason]||0)+1;
+  const exchangeBooks=Object.fromEntries(
+    exchanges.map((exchange)=>[exchange,Object.keys(snap.books[exchange]||{}).length])
+  );
+  const pairsWith2PlusVenues=snap.symbols.filter((symbol)=>
+    exchanges.filter((exchange)=>Boolean(snap.books[exchange]?.[symbol])).length>=2
+  ).length;
 
-  const finite=results.filter((r)=>Number.isFinite(r.netPnlUsdt));
-  const topGross=[...finite].sort((a,b)=>(b.grossPnlUsdt??-Infinity)-(a.grossPnlUsdt??-Infinity))[0]||null;
-  const topNet=[...finite].sort((a,b)=>(b.netPnlUsdt??-Infinity)-(a.netPnlUsdt??-Infinity))[0]||null;
+  return {snap,now,exchanges,results,exchangeBooks,pairsWith2PlusVenues};
+}
+
+function radarSnapshot(runtime,budgetUsdt=100) {
+  const budget=Number.isFinite(Number(budgetUsdt)) && Number(budgetUsdt)>0
+    ? Number(budgetUsdt)
+    : 100;
+  const cached=runtime.radarCache.get(budget);
+  if (cached && Date.now()-cached.generatedAt<RADAR_CACHE_MS) return cached;
+
+  const evaluated=evaluateRuntime(runtime,budget);
+  const finite=evaluated.results.filter((r)=>Number.isFinite(r?.netPnlUsdt));
+  const positives=topPositive(evaluated.results,5);
+  const nearest=[...finite]
+    .filter((r)=>!r?.eligible)
+    .sort((a,b)=>(b.netPnlUsdt??-Infinity)-(a.netPnlUsdt??-Infinity))
+    .slice(0,5);
+
+  const reasonCounts={};
+  for (const r of evaluated.results) {
+    reasonCounts[r.reason]=(reasonCounts[r.reason]||0)+1;
+  }
+
+  const body={
+    generatedAt:Date.now(),
+    version:APP_VERSION,
+    budgetUsdt:budget,
+    status:evaluated.snap.status,
+    monitored:evaluated.snap.symbols.length,
+    candidateUsdt:runtime.catalog.exchangeUniverse.candidateUsdt,
+    exchangeBooks:evaluated.exchangeBooks,
+    pairsWith2PlusVenues:evaluated.pairsWith2PlusVenues,
+    liquidResults:finite.length,
+    positiveNet:positives.length,
+    top5:positives,
+    nearest5:nearest,
+    reasonCounts,
+    safety:{
+      simulationOnly:true,
+      ordersEnabled:false,
+      transferabilityVerified:false,
+      anomalyGuardPct:DEFAULT_RULES.maxUnverifiedGrossSpreadPct,
+      venueDeviationGuardPct:DEFAULT_RULES.maxVenueDeviationPct,
+    },
+  };
+
+  runtime.radarCache.set(budget,body);
+  return body;
+}
+
+function marketDiagnostics(runtime,budgetUsdt=100) {
+  const radar=radarSnapshot(runtime,budgetUsdt);
+  const candidates=[...radar.top5,...radar.nearest5];
+  const topGross=[...candidates]
+    .filter((r)=>Number.isFinite(r?.grossPnlUsdt))
+    .sort((a,b)=>(b.grossPnlUsdt??-Infinity)-(a.grossPnlUsdt??-Infinity))[0]||null;
+  const topNet=[...candidates]
+    .filter((r)=>Number.isFinite(r?.netPnlUsdt))
+    .sort((a,b)=>(b.netPnlUsdt??-Infinity)-(a.netPnlUsdt??-Infinity))[0]||null;
 
   return {
-    generatedAt:now,
-    budgetUsdt,
-    monitored:snap.symbols.length,
-    exchangeBooks:Object.fromEntries(
-      exchanges.map((exchange)=>[exchange,Object.keys(snap.books[exchange]||{}).length])
-    ),
-    pairsWith2PlusVenues:snap.symbols.filter((symbol)=>
-      exchanges.filter((exchange)=>Boolean(snap.books[exchange]?.[symbol])).length>=2
-    ).length,
-    finiteResults:finite.length,
-    positiveNet:finite.filter((r)=>r.netPnlUsdt>0).length,
-    reasonCounts,
+    generatedAt:radar.generatedAt,
+    budgetUsdt:radar.budgetUsdt,
+    monitored:radar.monitored,
+    exchangeBooks:radar.exchangeBooks,
+    pairsWith2PlusVenues:radar.pairsWith2PlusVenues,
+    finiteResults:radar.liquidResults,
+    positiveNet:radar.positiveNet,
+    reasonCounts:radar.reasonCounts,
     topGross:topGross ? {
       symbol:topGross.symbol,
       buyExchange:topGross.buyExchange,
       sellExchange:topGross.sellExchange,
       grossPnlUsdt:topGross.grossPnlUsdt,
-      grossPctOnBuy:(topGross.grossPnlUsdt/budgetUsdt)*100,
+      grossPctOnBuy:topGross.grossSpreadPct,
       netPnlUsdt:topGross.netPnlUsdt,
     }:null,
     topNet:topNet ? {
@@ -316,14 +397,21 @@ const server=http.createServer(async(req,res)=>{
       return json(res,200,marketHub.snapshot());
     }
 
+    if (url.pathname==='/api/radar') {
+      const runtime=await ensureRuntime();
+      const budget=Number(url.searchParams.get('budget')||100);
+      return json(res,200,radarSnapshot(runtime,budget));
+    }
+
     if (url.pathname==='/api/diagnostics') {
       const runtime=await ensureRuntime();
       const budget=Number(url.searchParams.get('budget')||100);
-      return json(res,200,marketDiagnostics(runtime,Number.isFinite(budget)&&budget>0?budget:100));
+      return json(res,200,marketDiagnostics(runtime,budget));
     }
 
     if (url.pathname==='/api/reconnect' && req.method==='POST') {
-      const {marketHub}=await ensureRuntime();
+      const {marketHub,radarCache}=await ensureRuntime();
+      radarCache.clear();
       marketHub.reconnect();
       return json(res,202,{ok:true,message:'reconnect_requested'});
     }
