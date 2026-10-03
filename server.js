@@ -249,7 +249,9 @@ function evaluateRuntime(runtime,budgetUsdt=100) {
       result.breakEvenPct=
         exchangeFeePct(result.buyExchange,costs)
         + exchangeFeePct(result.sellExchange,costs)
-        + (costs.reservePct*2)
+        + (costs.reservePct*2);
+      result.breakEvenAfterRebalancePct=
+        result.breakEvenPct
         + ((costs.recompositionUsdt/budgetUsdt)*100);
     }
     return result;
