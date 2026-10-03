@@ -60,24 +60,39 @@ async function fetchFirst(bases, path) {
   throw new Error(errors.join(' | '));
 }
 
+async function fetchBybitSpotInstruments() {
+  const items = [];
+  let cursor = '';
+  let sourceBase = null;
+
+  do {
+    const suffix = cursor
+      ? `&cursor=${encodeURIComponent(cursor)}`
+      : '';
+    const result = await fetchFirst(
+      BYBIT_BASES,
+      `/v5/market/instruments-info?category=spot&limit=1000${suffix}`
+    );
+    sourceBase = result.base;
+    items.push(...(result.data?.result?.list || []));
+    cursor = result.data?.result?.nextPageCursor || '';
+  } while (cursor);
+
+  return { base: sourceBase, items };
+}
+
 async function getCatalog() {
-  const [binanceInfoResult, bybitInfoResult, binanceTickerResult, bybitTickerResult] = await Promise.all([
+  const [binanceInfoResult, bybitInfoResult] = await Promise.all([
     fetchFirst(BINANCE_BASES, '/api/v3/exchangeInfo'),
-    fetchFirst(BYBIT_BASES, '/v5/market/instruments-info?category=spot&limit=1000'),
-    fetchFirst(BINANCE_BASES, '/api/v3/ticker/24hr'),
-    fetchFirst(BYBIT_BASES, '/v5/market/tickers?category=spot'),
+    fetchBybitSpotInstruments(),
   ]);
 
   const binanceSymbols = binanceInfoResult.data?.symbols || [];
-  const bybitSymbols = bybitInfoResult.data?.result?.list || [];
-  const binanceTickers = Array.isArray(binanceTickerResult.data) ? binanceTickerResult.data : [];
-  const bybitTickers = bybitTickerResult.data?.result?.list || [];
+  const bybitSymbols = bybitInfoResult.items || [];
 
   const candidates = buildCommonUsdtMarkets({
     binanceSymbols,
     bybitSymbols,
-    binanceTickers,
-    bybitTickers,
   });
   const monitoredSymbols = selectConfirmedSymbols(candidates, MAX_MONITORED_SYMBOLS);
 
