@@ -23,9 +23,18 @@ test('bloqueia liquidez insuficiente na compra', () => {
   assert.equal(r.eligible,false); assert.equal(r.reason,'insufficient_buy_liquidity');
 });
 
-test('custos transformam spread bruto pequeno em resultado não positivo', () => {
-  const r = evaluateRoute({ symbol:'BTCUSDT', identityConfirmed:true, buyExchange:'binance', sellExchange:'bybit', buyBook:book(99.8,100), sellBook:book(100.4,100.5), budgetUsdt:100, costs, rules, now });
+test('taxas + reserva transformam spread bruto pequeno em resultado de execução não positivo', () => {
+  const r = evaluateRoute({ symbol:'BTCUSDT', identityConfirmed:true, buyExchange:'binance', sellExchange:'bybit', buyBook:book(99.8,100), sellBook:book(100.2,100.3), budgetUsdt:100, costs, rules, now });
   assert.ok(r.grossPnlUsdt > 0); assert.ok(r.netPnlUsdt < 0); assert.equal(r.eligible,false);
+});
+
+test('recomposição é cenário separado e não bloqueia execução positiva', () => {
+  const r = evaluateRoute({ symbol:'BTCUSDT', identityConfirmed:true, buyExchange:'binance', sellExchange:'bybit', buyBook:book(99.8,100), sellBook:book(100.5,100.6), budgetUsdt:100, costs, rules, now });
+  assert.ok(r.executionNetPnlUsdt > 0);
+  assert.ok(r.netAfterRebalanceUsdt < 0);
+  assert.equal(r.netPnlUsdt, r.executionNetPnlUsdt);
+  assert.equal(r.eligible,true);
+  assert.equal(r.eligibilityModel,'execution_net_before_rebalance');
 });
 
 test('spread suficiente gera resultado líquido positivo', () => {
@@ -109,7 +118,7 @@ test('teto amplo cobre mais de dois mil pares com múltiplas conexões Binance',
     Array.from({length:2290},(_,i)=>`s${i}@bookTicker`),
     BINANCE_STREAMS_PER_SOCKET,
   );
-  assert.deepEqual(groups.map((x)=>x.length), [900,900,490]);
+  assert.deepEqual(groups.map((x)=>x.length), [700,700,700,190]);
 });
 
 
