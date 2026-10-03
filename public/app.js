@@ -1,4 +1,4 @@
-import { DEFAULT_COSTS, DEFAULT_RULES, evaluatePair, topPositive } from '/src/core.js';
+import { DEFAULT_COSTS, DEFAULT_RULES, applyOrderBookMessage, evaluatePair, topPositive } from '/src/core.js';
 
 const state = {
   budget: 100,
@@ -67,9 +67,16 @@ function connectBybit(symbols) {
     if (!msg.topic?.startsWith('orderbook.')) return;
     const d = msg.data;
     if (!d?.s || !d?.b || !d?.a) return;
-    const ts = Number(msg.ts) || Date.now();
-    state.books.bybit.set(d.s, { bids:d.b, asks:d.a, ts });
-    touch('bybit', ts);
+    const receivedAt = Date.now();
+    const next = applyOrderBookMessage(
+      state.books.bybit.get(d.s),
+      { bids:d.b, asks:d.a, ts:receivedAt },
+      msg.type || 'snapshot',
+      50
+    );
+    if (!next) return;
+    state.books.bybit.set(d.s, next);
+    touch('bybit', receivedAt);
     render();
   };
 }
