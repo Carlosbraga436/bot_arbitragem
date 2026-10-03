@@ -25,7 +25,7 @@ const OKX_BASES = ['https://www.okx.com','https://openapi.okx.com'];
 const GATE_BASES = ['https://api.gateio.ws/api/v4'];
 const KUCOIN_BASES = ['https://api.kucoin.com'];
 const REQUEST_TIMEOUT_MS = 10_000;
-const APP_VERSION = '0.19.0-recovery.1';
+const APP_VERSION = '0.19.1-recovery.1';
 const RADAR_CACHE_MS = 750;
 
 let runtimePromise = null;
@@ -252,7 +252,7 @@ function evaluateRuntime(runtime,budgetUsdt=100) {
         + (costs.reservePct*2);
       result.breakEvenAfterRebalancePct=
         result.breakEvenPct
-        + ((costs.recompositionUsdt/budgetUsdt)*100);
+        + ((costs.recompositionUsdt/result.budgetUsdt)*100);
     }
     return result;
   });
