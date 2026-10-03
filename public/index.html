@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Entre • Radar Cripto</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div><span class="eyebrow">ENTRE</span><h1>RADAR CRIPTO</h1><p>BINANCE × BYBIT · mercado spot USDT · somente simulação</p></div>
+      <button id="reconnect">Reconectar ↻</button>
+    </header>
+
+    <section class="card controls">
+      <div><label>Valor por compra</label><strong><span id="budgetLabel">100</span> USDT</strong></div>
+      <div class="pills"><button data-budget="100" class="active">100</button><button data-budget="500">500</button><button data-budget="1000">1.000</button></div>
+      <div><small>Capital nas duas pontas ≈ <span id="capital">200</span> USDT + custos</small></div>
+    </section>
+
+    <section class="grid2">
+      <article class="card"><div class="statusRow"><b>Binance</b><span id="binanceStatus" class="dot pending">Conectando</span></div><small id="binanceLast">Última cotação: —</small></article>
+      <article class="card"><div class="statusRow"><b>Bybit</b><span id="bybitStatus" class="dot pending">Conectando</span></div><small id="bybitLast">Última cotação: —</small></article>
+    </section>
+
+    <section class="card hero">
+      <span class="eyebrow">MELHOR RESULTADO DO RADAR</span>
+      <div id="best"><h2>—</h2><p>Aguardando dados recentes nas duas corretoras.</p></div>
+    </section>
+
+    <section class="card">
+      <div class="sectionHead"><div><h2>Radar de oportunidades</h2><p id="summary">Carregando catálogo…</p></div><div class="badge" id="identity">0/25 identidades</div></div>
+      <div class="costs">Custos: Binance 0,10% · Bybit 0,10% · reserva 0,05% · recomposição 0,50 USDT.</div>
+      <div class="tableWrap"><table><thead><tr><th>Par</th><th>Comprar</th><th>Vender</th><th>Compra VWAP</th><th>Venda VWAP</th><th>Líquido</th><th>ROI capital</th><th>Status</th></tr></thead><tbody id="rows"><tr><td colspan="8">Aguardando…</td></tr></tbody></table></div>
+    </section>
+
+    <footer>Sem depósito · sem API key · sem envio de ordens · estimativas dependem de liquidez e custos configurados.</footer>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
