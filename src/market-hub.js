@@ -1,6 +1,7 @@
 import { finitePositive } from './core.js';
 
-export const MAX_MONITORED_SYMBOLS = 800;
+export const MAX_MONITORED_SYMBOLS = 2400;
+export const BINANCE_STREAMS_PER_SOCKET = 900;
 export const BINANCE_SUBSCRIBE_CHUNK = 180;
 export const GATE_SUBSCRIBE_CHUNK = 80;
 export const AGGREGATE_POLL_MS = 1_000;
@@ -237,7 +238,8 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     kucoinRestSource:null,
   };
 
-  const sockets = { binance:null, gate:null };
+  const sockets = { gate:null };
+  let binanceSockets = [];
   const reconnectTimers = { binance:null, gate:null };
   const timers = new Set();
   let stopped = false;
@@ -281,49 +283,70 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     return true;
   }
 
+  function closeBinanceSockets() {
+    for (const ws of binanceSockets) {
+      try { ws?.close(); } catch {}
+    }
+    binanceSockets = [];
+  }
+
   function connectBinance() {
     if (stopped || !monitored.length) return;
-    try { sockets.binance?.close(); } catch {}
+    closeBinanceSockets();
     setStatus('binance','connecting');
 
-    const ws = new WebSocket(BINANCE_WS);
-    sockets.binance = ws;
+    const streamGroups = chunkTopics(
+      monitored.map((s)=>`${s.toLowerCase()}@bookTicker`),
+      BINANCE_STREAMS_PER_SOCKET,
+    );
 
-    ws.onopen = () => {
-      logger.info('[market] Binance WS conectado; assinando bookTicker');
-      const topics = monitored.map((s)=>`${s.toLowerCase()}@bookTicker`);
-      chunkTopics(topics, BINANCE_SUBSCRIBE_CHUNK).forEach((params,index)=>{
-        later(()=>{
-          if (ws.readyState !== WebSocket.OPEN) return;
-          ws.send(JSON.stringify({method:'SUBSCRIBE',params,id:index+1}));
-        }, index * 300);
-      });
-    };
-    ws.onerror = () => setStatus('binance','error','websocket_error');
-    ws.onclose = (event) => {
-      setStatus('binance','disconnected',`close_${event?.code ?? 'unknown'}`);
-      logger.warn('[market] Binance WS desconectado', event?.code);
-      scheduleReconnect('binance', connectBinance);
-    };
-    ws.onmessage = (event) => {
-      try {
-        const msg = parseMessage(event);
-        if (Object.hasOwn(msg || {},'result') && Object.hasOwn(msg || {},'id')) {
-          if (msg.result === null) diagnostics.binanceSubscribedBatches += 1;
-          return;
-        }
-        const symbol = msg?.s;
-        const ok = storeBook('binance',symbol,{
-          bidPrice:msg.b,bidQty:msg.B,askPrice:msg.a,askQty:msg.A,
+    streamGroups.forEach((streams, socketIndex) => {
+      const ws = new WebSocket(BINANCE_WS);
+      binanceSockets.push(ws);
+
+      ws.onopen = () => {
+        logger.info('[market] Binance WS conectado', socketIndex + 1, '/', streamGroups.length);
+        chunkTopics(streams, BINANCE_SUBSCRIBE_CHUNK).forEach((params,index)=>{
+          later(()=>{
+            if (ws.readyState !== WebSocket.OPEN) return;
+            ws.send(JSON.stringify({
+              method:'SUBSCRIBE',
+              params,
+              id:(socketIndex * 1000) + index + 1,
+            }));
+          }, index * 300);
         });
-        if (ok && !diagnostics.binanceFirstQuoteAt) {
-          diagnostics.binanceFirstQuoteAt = Date.now();
-          logger.info('[market] Binance primeira cotação', symbol);
+      };
+
+      ws.onerror = () => setStatus('binance','error','websocket_error');
+
+      ws.onclose = (event) => {
+        if (stopped) return;
+        setStatus('binance','disconnected',`close_${event?.code ?? 'unknown'}`);
+        logger.warn('[market] Binance WS desconectado', socketIndex + 1, event?.code);
+        scheduleReconnect('binance', connectBinance);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = parseMessage(event);
+          if (Object.hasOwn(msg || {},'result') && Object.hasOwn(msg || {},'id')) {
+            if (msg.result === null) diagnostics.binanceSubscribedBatches += 1;
+            return;
+          }
+          const symbol = msg?.s;
+          const ok = storeBook('binance',symbol,{
+            bidPrice:msg.b,bidQty:msg.B,askPrice:msg.a,askQty:msg.A,
+          });
+          if (ok && !diagnostics.binanceFirstQuoteAt) {
+            diagnostics.binanceFirstQuoteAt = Date.now();
+            logger.info('[market] Binance primeira cotação', symbol);
+          }
+        } catch (error) {
+          logger.warn('[market] Binance mensagem inválida', error?.message || error);
         }
-      } catch (error) {
-        logger.warn('[market] Binance mensagem inválida', error?.message || error);
-      }
-    };
+      };
+    });
   }
 
   async function fetchBybitSnapshot() {
@@ -559,6 +582,7 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
       if (reconnectTimers[key]) clearTimeout(reconnectTimers[key]);
       reconnectTimers[key] = null;
     }
+    closeBinanceSockets();
     for (const ws of Object.values(sockets)) {
       try { ws?.close(); } catch {}
     }
@@ -570,6 +594,7 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     kucoinGeneration += 1;
     for (const timer of timers) clearTimeout(timer);
     timers.clear();
+    closeBinanceSockets();
     for (const ws of Object.values(sockets)) {
       try { ws?.close(); } catch {}
     }
