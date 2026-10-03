@@ -60,8 +60,10 @@ jobs:
         if: steps.detect.outputs.node == 'true'
         run: npm ci
 
+      - name: Check Node syntax
+        if: steps.detect.outputs.node == 'true'
+        run: npm run check
+
       - name: Run Node tests
         if: steps.detect.outputs.node == 'true'
-        shell: bash
-        run: |
-          npm test -- --runInBand || npm test
+        run: npm test
