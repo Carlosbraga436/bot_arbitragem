@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyOrderBookMessage, evaluatePair, evaluateRoute, topPositive } from '../src/core.js';
+import { createMarketHub } from '../src/market-hub.js';
 
 const now = 1_800_000_000_000;
 const book = (bid, ask, qty=1000, ts=now) => ({ bids:[[String(bid),String(qty)]], asks:[[String(ask),String(qty)]], ts });
@@ -48,4 +49,15 @@ test('Bybit depth 50 aplica snapshot e delta sem tratar delta como livro complet
   const next = applyOrderBookMessage(snap, { bids:[["100","0"],["98","5"]], asks:[["101","7"]], ts:now+10 }, 'delta', 50);
   assert.deepEqual(next.bids, [[99,3],[98,5]]);
   assert.deepEqual(next.asks, [[101,7],[102,4]]);
+});
+
+
+test('market hub inicia em estado seguro e expõe símbolos sem credenciais', () => {
+  const hub = createMarketHub({ symbols:['BTCUSDT'], logger:{ info(){}, warn(){} } });
+  const snap = hub.snapshot();
+  assert.deepEqual(snap.symbols,['BTCUSDT']);
+  assert.equal(snap.status.binance.state,'idle');
+  assert.equal(snap.status.bybit.state,'idle');
+  assert.deepEqual(snap.books.binance,{});
+  assert.deepEqual(snap.books.bybit,{});
 });
