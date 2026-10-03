@@ -106,3 +106,16 @@ test('teto amplo de monitoramento permanece abaixo de mil streams', () => {
   assert.ok(MAX_MONITORED_SYMBOLS > 100);
   assert.ok(MAX_MONITORED_SYMBOLS <= 1000);
 });
+
+
+test('modo hospedado usa universo Bybit e exige confirmação live implícita pela presença de books', () => {
+  const markets = buildCommonUsdtMarkets({
+    bybitSymbols:[
+      {symbol:'ABCUSDT',baseCoin:'ABC',quoteCoin:'USDT',status:'Trading'},
+      {symbol:'XYZUSDT',baseCoin:'XYZ',quoteCoin:'USDT',status:'Trading'},
+      {symbol:'PAUSEDUSDT',baseCoin:'PAUSED',quoteCoin:'USDT',status:'PreLaunch'},
+    ],
+  });
+  assert.deepEqual(markets.map((x)=>x.symbol), ['ABCUSDT','XYZUSDT']);
+  assert.equal(markets[0].identityMethod, 'bybit_catalog+exact_symbol_live_probe_on_binance');
+});
