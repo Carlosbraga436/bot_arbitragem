@@ -3,6 +3,7 @@ const TIMEOUT_MS = 10_000;
 const BYBIT_REST = ['https://api.bybit.com','https://api.bytick.com'];
 const OKX_REST = ['https://www.okx.com','https://openapi.okx.com'];
 const GATE_REST = ['https://api.gateio.ws/api/v4'];
+const KUCOIN_REST = ['https://api.kucoin.com'];
 
 function elapsed(start) {
   return Date.now() - start;
@@ -17,7 +18,7 @@ async function probeRest(name,bases,path,validate) {
     try {
       const response=await fetch(`${base}${path}`,{
         signal:controller.signal,
-        headers:{'user-agent':'radar-cripto-carlos-live-diagnostic/0.18'},
+        headers:{'user-agent':'radar-cripto-carlos-live-diagnostic/0.19'},
       });
       const latencyMs=elapsed(start);
       if (!response.ok) {
@@ -79,7 +80,7 @@ function probeWs(name,url,onOpen,validateMessage) {
 
 const startedAt=new Date().toISOString();
 
-const [binanceWs,bybitRest,okxRest,gateRest,gateWs]=await Promise.all([
+const [binanceWs,bybitRest,okxRest,gateRest,gateWs,kucoinRest]=await Promise.all([
   probeWs(
     'binance_ws',
     'wss://stream.binance.com:443/ws/btcusdt@bookTicker',
@@ -125,12 +126,22 @@ const [binanceWs,bybitRest,okxRest,gateRest,gateWs]=await Promise.all([
       && Number(msg?.result?.B)>0
       && Number(msg?.result?.A)>0,
   ),
+  probeRest(
+    'kucoin_rest',
+    KUCOIN_REST,
+    '/api/v1/market/allTickers',
+    (data)=>data?.code==='200000' && data?.data?.ticker?.some(
+      (x)=>x.symbol==='BTC-USDT'
+        && Number(x.buy)>0 && Number(x.sell)>0
+        && Number(x.bestBidSize)>0 && Number(x.bestAskSize)>0
+    ),
+  ),
 ]);
 
-const checks=[binanceWs,bybitRest,okxRest,gateRest,gateWs];
+const checks=[binanceWs,bybitRest,okxRest,gateRest,gateWs,kucoinRest];
 const report={
   program:'Radar Cripto — diagnóstico live multi-exchange',
-  version:'0.18.0-recovery.1',
+  version:'0.19.0-recovery.1',
   startedAt,
   finishedAt:new Date().toISOString(),
   node:process.version,
