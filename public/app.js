@@ -105,7 +105,11 @@ async function bootstrap() {
   const data = await r.json();
   state.catalog = data.candidates || [];
   const confirmed = scoreCandidates(state.catalog.filter((x)=>x.identityConfirmed));
-  state.monitored = confirmed.slice(0,15);
+  const bySymbol = new Map(state.catalog.map((x) => [x.symbol, x]));
+  const runtimeSymbols = Array.isArray(data.monitoredSymbols) && data.monitoredSymbols.length
+    ? data.monitoredSymbols
+    : confirmed.slice(0,15).map((x)=>x.symbol);
+  state.monitored = runtimeSymbols.map((symbol) => bySymbol.get(symbol)).filter(Boolean);
 
   $('identity').textContent = `${confirmed.length}/${state.catalog.length} identidades`;
   $('summary').textContent = `${state.monitored.length} monitoradas · ${state.catalog.length} candidatas · somente identidades confirmadas`;
