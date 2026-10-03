@@ -61,7 +61,7 @@ function renderRadar(data) {
   $('summary').textContent=
     `${Number(data?.monitored||0).toLocaleString('pt-BR')} sondados · `+
     `${Number(data?.pairsWith2PlusVenues||0).toLocaleString('pt-BR')} com cotação em 2+ casas · `+
-    `${Number(data?.liquidResults||0).toLocaleString('pt-BR')} com liquidez p/ ${state.budget.toLocaleString('pt-BR')} USDT · `+
+    `${Number(data?.liquidResults||0).toLocaleString('pt-BR')} rotas avaliáveis com até ${state.budget.toLocaleString('pt-BR')} USDT · `+
     `${Number(data?.positiveNet||0)} elegíveis`;
 
   $('breakEven').textContent='O breakeven varia conforme a direção e as taxas aplicáveis ao par em cada exchange.';
@@ -83,16 +83,21 @@ function renderRadar(data) {
       ? Math.max(0,breakEven-grossPct)
       : null;
 
+    const requested=Number(best.requestedBudgetUsdt||state.budget);
+    const executable=Number(best.executableBudgetUsdt||best.budgetUsdt);
+    const limited=Boolean(best.liquidityLimited);
+
     $('best').innerHTML=`
       <h2>${best.symbol}${eligible?` <span class="profit">${money(best.netPnlUsdt)}</span>`:''}</h2>
       <div class="heroRoute">${directionLabel(best)}</div>
       <div class="heroMetrics">
+        <span><small>Valor executável</small><b>${fmt(executable,2)} USDT${limited?` / ${fmt(requested,0)} máx.`:''}</b></span>
         <span><small>Spread bruto</small><b class="${eligible?'pos':''}">${grossPct>=0?'+':''}${fmt(grossPct,3)}%</b></span>
         <span><small>Líquido execução</small><b class="${eligible?'pos':'neg'}">${money(best.netPnlUsdt)}</b></span>
         <span><small>Após recomposição</small><b class="${Number(best.netAfterRebalanceUsdt)>=0?'pos':'neg'}">${money(best.netAfterRebalanceUsdt)}</b></span>
         <span><small>${eligible?'Breakeven execução':'Falta p/ breakeven'}</small><b>${eligible?fmt(breakEven,3)+'%':fmt(gapPct,3)+' p.p.'}</b></span>
       </div>
-      <p>Comprar em ${exchangeLabel(best.buyExchange)} @ ${fmt(best.buyVwap,8)} · vender em ${exchangeLabel(best.sellExchange)} @ ${fmt(best.sellVwap,8)} · ROI da execução ${fmt(best.roiOnTotalCapitalPct,3)}%. A recomposição é estimada separadamente e não bloqueia a oportunidade executável.</p>`;
+      <p>Comprar em ${exchangeLabel(best.buyExchange)} @ ${fmt(best.buyVwap,8)} · vender em ${exchangeLabel(best.sellExchange)} @ ${fmt(best.sellVwap,8)} · ROI da execução ${fmt(best.roiOnTotalCapitalPct,3)}%. ${limited?`Com limite de ${fmt(requested,0)} USDT, o book atualmente visível comporta ${fmt(executable,2)} USDT nesta rota.`:'O valor máximo selecionado cabe integralmente no book visível.'} A recomposição é estimada separadamente.</p>`;
   } else {
     $('bestLabel').textContent='MELHOR CANDIDATA AGORA';
     $('best').innerHTML='<h2>—</h2><p>Aguardando pares com cotação recente e liquidez suficiente em pelo menos duas exchanges.</p>';
@@ -114,7 +119,11 @@ function renderRadar(data) {
           <td><b class="routeText">${directionLabel(r)}</b><small class="priceLine">Compra ${fmt(r.buyVwap,8)} · Venda ${fmt(r.sellVwap,8)}</small></td>
           <td class="${eligible?'pos':''}">${grossPct>=0?'+':''}${fmt(grossPct,3)}%</td>
           <td class="${cls}">${money(r.netPnlUsdt)}<small class="priceLine">Pós-rebalance ${money(r.netAfterRebalanceUsdt)}</small></td>
-          <td>${eligible?'elegível agora':`breakeven ${fmt(breakEven,3)}%`}</td>
+          <td>${eligible
+            ? (r.liquidityLimited
+                ? `elegível até ${fmt(r.executableBudgetUsdt||r.budgetUsdt,2)} USDT`
+                : `elegível até ${fmt(r.requestedBudgetUsdt||state.budget,0)} USDT`)
+            : `breakeven ${fmt(breakEven,3)}%`}</td>
         </tr>`;
       }).join('')
     : '<tr><td colspan="5">Nenhum par com dados e liquidez completos neste instante.</td></tr>';
