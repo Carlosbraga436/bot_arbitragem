@@ -138,7 +138,7 @@ test('modo hospedado usa universo Bybit e exige confirmação live implícita pe
 
 test('evaluateAcrossExchanges escolhe a melhor rota entre quatro exchanges', () => {
   const multiCosts = {
-    exchangeFeePct:{binance:0.1,bybit:0.1,okx:0.4,gate:0.1},
+    exchangeFeePct:{binance:0.1,bybit:0.1,okx:0.1,gate:0.1},
     reservePct:0.05,
     recompositionUsdt:0.5,
   };
@@ -163,7 +163,7 @@ test('evaluateAcrossExchanges escolhe a melhor rota entre quatro exchanges', () 
 
 test('taxa específica da OKX é aplicada à rota', () => {
   const multiCosts = {
-    exchangeFeePct:{binance:0.1,bybit:0.1,okx:0.4,gate:0.1},
+    exchangeFeePct:{binance:0.1,bybit:0.1,okx:0.1,gate:0.1},
     reservePct:0,
     recompositionUsdt:0,
   };
@@ -272,7 +272,7 @@ test('consenso não bloqueia rota normal entre venues alinhadas', () => {
     },
     budgetUsdt:100,
     costs:{
-      exchangeFeePct:{binance:0.1,bybit:0.1,okx:0.4},
+      exchangeFeePct:{binance:0.1,bybit:0.1,okx:0.1},
       reservePct:0.05,
       recompositionUsdt:0.5,
     },
@@ -361,7 +361,7 @@ test('custos padrão multiexchange continuam aplicados quando catálogo não inf
     },
     budgetUsdt:100,
     costs:{
-      exchangeFeePct:{bybit:0.10,okx:0.40},
+      exchangeFeePct:{bybit:0.10,okx:0.10},
       reservePct:0.05,
       recompositionUsdt:0.50,
     },
@@ -371,4 +371,25 @@ test('custos padrão multiexchange continuam aplicados quando catálogo não inf
   assert.ok(r.tradingFeesUsdt > 0.49);
   assert.ok(r.executionNetPnlUsdt < 0);
   assert.equal(r.eligible,false);
+});
+
+
+test('OKX USDT usa taker regular de 0,10% no modelo atual', () => {
+  const r = evaluateRoute({
+    symbol:'ETHUSDT',
+    identityConfirmed:true,
+    buyExchange:'bybit',
+    sellExchange:'okx',
+    buyBook:book(99.9,100),
+    sellBook:book(100.5,100.6),
+    budgetUsdt:100,
+    costs:{
+      exchangeFeePct:{bybit:0.10,okx:0.10},
+      reservePct:0.05,
+      recompositionUsdt:0.50,
+    },
+    rules,
+    now,
+  });
+  assert.ok(r.tradingFeesUsdt > 0.19 && r.tradingFeesUsdt < 0.21);
 });
