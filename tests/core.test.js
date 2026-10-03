@@ -198,3 +198,26 @@ test('market hub seguro expõe as quatro exchanges antes de iniciar', () => {
   assert.equal(snap.status.okx.state,'idle');
   assert.equal(snap.status.gate.state,'idle');
 });
+
+
+test('bloqueia dislocação extrema não validada antes do Top 5', () => {
+  const r = evaluateRoute({
+    symbol:'ONEUSDT',
+    identityConfirmed:true,
+    buyExchange:'gate',
+    sellExchange:'binance',
+    buyBook:book(1.0,1.0,1000),
+    sellBook:book(1.4,1.41,1000),
+    budgetUsdt:100,
+    costs:{
+      exchangeFeePct:{gate:0.1,binance:0.1},
+      reservePct:0.05,
+      recompositionUsdt:0.5,
+    },
+    rules:{...rules,maxUnverifiedGrossSpreadPct:10},
+    now,
+  });
+  assert.equal(r.eligible,false);
+  assert.equal(r.reason,'price_anomaly_unverified');
+  assert.ok(r.grossSpreadPct > 10);
+});
