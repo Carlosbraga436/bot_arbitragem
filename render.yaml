@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: radar-cripto-carlos
+    runtime: node
+    plan: free
+    region: frankfurt
+    branch: recovery/site-v16-baseline
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: false
+    envVars:
+      - key: NODE_VERSION
+        value: 22

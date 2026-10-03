@@ -1,0 +1,16 @@
+{
+  "name": "radar-cripto-carlos",
+  "version": "0.17.0-recovery.1",
+  "private": true,
+  "type": "module",
+  "description": "Radar Cripto Binance x Bybit com universo dinâmico de pares spot USDT. Somente leitura/simulação, sem ordens.",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test",
+    "check": "node --check server.js && node --check src/core.js && node --check src/market-hub.js && node --check public/app.js && node --check scripts/diagnose-live.js",
+    "diagnose": "node scripts/diagnose-live.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
