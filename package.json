@@ -1,0 +1,15 @@
+{
+  "name": "radar-cripto-carlos",
+  "version": "0.16.0-recovery.1",
+  "private": true,
+  "type": "module",
+  "description": "Baseline recuperada do Radar Cripto Binance x Bybit. Somente leitura/simulação, sem ordens.",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test",
+    "check": "node --check server.js && node --check src/core.js && node --check public/app.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
