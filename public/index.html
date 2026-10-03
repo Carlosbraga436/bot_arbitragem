@@ -9,7 +9,7 @@
 <body>
   <main class="shell">
     <header>
-      <div><span class="eyebrow">ENTRE</span><h1>RADAR CRIPTO</h1><p>BINANCE × BYBIT · mercado spot USDT · somente simulação</p></div>
+      <div><span class="eyebrow">ENTRE</span><h1>RADAR CRIPTO</h1><p>BINANCE × BYBIT × OKX × GATE.IO · spot USDT · somente simulação</p></div>
       <button id="reconnect">Reconectar ↻</button>
     </header>
 
@@ -22,6 +22,8 @@
     <section class="grid2">
       <article class="card"><div class="statusRow"><b>Binance</b><span id="binanceStatus" class="dot pending">Conectando</span></div><small id="binanceLast">Última cotação: —</small></article>
       <article class="card"><div class="statusRow"><b>Bybit</b><span id="bybitStatus" class="dot pending">Conectando</span></div><small id="bybitLast">Última cotação: —</small></article>
+      <article class="card"><div class="statusRow"><b>OKX</b><span id="okxStatus" class="dot pending">Conectando</span></div><small id="okxLast">Última cotação: —</small></article>
+      <article class="card"><div class="statusRow"><b>Gate.io</b><span id="gateStatus" class="dot pending">Conectando</span></div><small id="gateLast">Última cotação: —</small></article>
     </section>
 
     <section class="card hero">
@@ -31,11 +33,11 @@
 
     <section class="card">
       <div class="sectionHead"><div><h2 id="tableTitle">Top 5 oportunidades elegíveis</h2><p id="summary">Descobrindo pares comuns…</p></div><div class="badge" id="identity">0 comuns</div></div>
-      <div class="costs">Custos: Binance 0,10% · Bybit 0,10% · reserva 0,05% · recomposição 0,50 USDT. Oportunidades só entram no Top 5 quando há quantidade suficiente nas duas casas para o valor selecionado. <span id="breakEven"></span></div>
+      <div class="costs">Taxas taker modeladas: Binance 0,10% · Bybit 0,10% · OKX 0,40% · Gate.io 0,10% · reserva 0,05% por ponta · recomposição 0,50 USDT. Oportunidades só entram no Top 5 com liquidez suficiente nas duas pontas. <span id="breakEven"></span></div>
       <div class="tableWrap"><table><thead><tr><th>Par</th><th>Direção</th><th>Spread</th><th>Líquido</th><th>Status</th></tr></thead><tbody id="rows"><tr><td colspan="5">Aguardando…</td></tr></tbody></table></div>
     </section>
 
-    <footer>Sem depósito · sem API key · sem envio de ordens · universo USDT dinâmico · Top 5 exige liquidez atual nas duas casas e lucro líquido após custos.</footer>
+    <footer>Sem depósito · sem API key · sem envio de ordens · 4 exchanges · universo USDT dinâmico · Top 5 exige liquidez nas duas pontas e lucro líquido após custos.</footer>
   </main>
   <script type="module" src="/app.js"></script>
 </body>
