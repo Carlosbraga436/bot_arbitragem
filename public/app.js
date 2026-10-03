@@ -1,12 +1,11 @@
-import { DEFAULT_COSTS, DEFAULT_RULES, applyOrderBookMessage, evaluatePair, topPositive } from '/src/core.js';
+import { DEFAULT_COSTS, DEFAULT_RULES, evaluatePair, topPositive } from '/src/core.js';
 
 const state = {
   budget: 100,
   catalog: [],
   monitored: [],
   books: { binance: new Map(), bybit: new Map() },
-  sockets: { binance: null, bybit: null },
-  last: { binance: null, bybit: null },
+  pollTimer: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -19,66 +18,29 @@ function setStatus(exchange, kind, text) {
   el.textContent = text;
 }
 
-function touch(exchange, ts = Date.now()) {
-  state.last[exchange] = ts;
-  $(`${exchange}Last`).textContent = `Última cotação: ${new Date(ts).toLocaleTimeString('pt-BR')}`;
+function touch(exchange, ts) {
+  const el = $(`${exchange}Last`);
+  el.textContent = ts ? `Última cotação: ${new Date(ts).toLocaleTimeString('pt-BR')}` : 'Última cotação: —';
 }
 
-function closeSockets() {
-  for (const ws of Object.values(state.sockets)) try { ws?.close(); } catch {}
-  state.sockets = { binance: null, bybit: null };
+function stopPolling() {
+  if (state.pollTimer) clearInterval(state.pollTimer);
+  state.pollTimer = null;
 }
 
-function connectBinance(symbols) {
-  const streams = symbols.map((s) => `${s.toLowerCase()}@depth20@100ms`).join('/');
-  const ws = new WebSocket(`wss://stream.binance.com:9443/stream?streams=${streams}`);
-  state.sockets.binance = ws;
-  setStatus('binance','pending','Conectando');
-  ws.onopen = () => setStatus('binance','ok','Conectado');
-  ws.onerror = () => setStatus('binance','bad','Erro');
-  ws.onclose = () => setStatus('binance','bad','Desconectado');
-  ws.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
-    const stream = msg.stream || '';
-    const symbol = stream.split('@')[0]?.toUpperCase();
-    const d = msg.data;
-    if (!symbol || !d?.bids || !d?.asks) return;
-    const ts = Date.now();
-    state.books.binance.set(symbol, { bids:d.bids, asks:d.asks, ts });
-    touch('binance', ts);
-    render();
-  };
-}
+function applyStatus(exchange, remote) {
+  const last = Number(remote?.last) || null;
+  touch(exchange, last);
 
-function connectBybit(symbols) {
-  const ws = new WebSocket('wss://stream.bybit.com/v5/public/spot');
-  state.sockets.bybit = ws;
-  let heartbeat;
-  setStatus('bybit','pending','Conectando');
-  ws.onopen = () => {
-    setStatus('bybit','ok','Conectado');
-    ws.send(JSON.stringify({ op:'subscribe', args:symbols.map((s)=>`orderbook.50.${s}`) }));
-    heartbeat = setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ op:'ping' })); }, 20_000);
-  };
-  ws.onerror = () => setStatus('bybit','bad','Erro');
-  ws.onclose = () => { clearInterval(heartbeat); setStatus('bybit','bad','Desconectado'); };
-  ws.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
-    if (!msg.topic?.startsWith('orderbook.')) return;
-    const d = msg.data;
-    if (!d?.s || !d?.b || !d?.a) return;
-    const receivedAt = Date.now();
-    const next = applyOrderBookMessage(
-      state.books.bybit.get(d.s),
-      { bids:d.b, asks:d.a, ts:receivedAt },
-      msg.type || 'snapshot',
-      50
-    );
-    if (!next) return;
-    state.books.bybit.set(d.s, next);
-    touch('bybit', receivedAt);
-    render();
-  };
+  if (remote?.state === 'connected') {
+    setStatus(exchange, 'ok', 'Conectado');
+    return;
+  }
+  if (remote?.state === 'connecting' || remote?.state === 'idle') {
+    setStatus(exchange, 'pending', 'Conectando');
+    return;
+  }
+  setStatus(exchange, 'bad', 'Indisponível');
 }
 
 function scoreCandidates(candidates) {
@@ -90,22 +52,67 @@ function scoreCandidates(candidates) {
   });
 }
 
+function ingestBooks(exchange, incoming = {}) {
+  const allowed = new Set(state.monitored.map((x)=>x.symbol));
+  const target = state.books[exchange];
+  for (const [symbol, book] of Object.entries(incoming)) {
+    if (!allowed.has(symbol)) continue;
+    if (!Array.isArray(book?.bids) || !Array.isArray(book?.asks) || !Number.isFinite(Number(book?.ts))) continue;
+    target.set(symbol, {
+      bids: book.bids,
+      asks: book.asks,
+      ts: Number(book.ts),
+    });
+  }
+}
+
+async function fetchMarket() {
+  const r = await fetch('/api/market', { cache:'no-store' });
+  if (!r.ok) throw new Error(`Mercado HTTP ${r.status}`);
+  const data = await r.json();
+
+  ingestBooks('binance', data?.books?.binance);
+  ingestBooks('bybit', data?.books?.bybit);
+  applyStatus('binance', data?.status?.binance);
+  applyStatus('bybit', data?.status?.bybit);
+  render();
+}
+
+async function startPolling() {
+  await fetchMarket();
+  state.pollTimer = setInterval(() => {
+    fetchMarket().catch((error) => {
+      console.warn('Falha ao atualizar mercado:', error);
+    });
+  }, 1_000);
+}
+
 async function bootstrap() {
-  closeSockets();
-  state.books.binance.clear(); state.books.bybit.clear();
+  stopPolling();
+  state.books.binance.clear();
+  state.books.bybit.clear();
+  setStatus('binance','pending','Conectando');
+  setStatus('bybit','pending','Conectando');
+  touch('binance', null);
+  touch('bybit', null);
+
   const r = await fetch('/api/catalog', { cache:'no-store' });
-  if (!r.ok) throw new Error(`Catálogo HTTP ${r.status}`);
+  if (!r.ok) {
+    const body = await r.json().catch(() => null);
+    throw new Error(body?.message || `Catálogo HTTP ${r.status}`);
+  }
+
   const data = await r.json();
   state.catalog = data.candidates || [];
   const confirmed = scoreCandidates(state.catalog.filter((x)=>x.identityConfirmed));
   state.monitored = confirmed.slice(0,15);
+
   $('identity').textContent = `${confirmed.length}/${state.catalog.length} identidades`;
   $('summary').textContent = `${state.monitored.length} monitoradas · ${state.catalog.length} candidatas · somente identidades confirmadas`;
+
   if (!state.monitored.length) throw new Error('Nenhum par comum confirmado nos catálogos.');
-  const symbols = state.monitored.map((x)=>x.symbol);
-  connectBinance(symbols);
-  connectBybit(symbols);
-  render();
+
+  await startPolling();
 }
 
 function currentResults() {
@@ -150,9 +157,16 @@ for (const btn of document.querySelectorAll('[data-budget]')) {
     render();
   });
 }
-$('reconnect').addEventListener('click', () => bootstrap().catch(showFatal));
+
+$('reconnect').addEventListener('click', async () => {
+  try {
+    await fetch('/api/reconnect', { method:'POST' });
+  } catch {}
+  bootstrap().catch(showFatal);
+});
 
 function showFatal(error) {
+  stopPolling();
   $('summary').textContent = `Falha segura: ${error.message}`;
   setStatus('binance','bad','Indisponível');
   setStatus('bybit','bad','Indisponível');
