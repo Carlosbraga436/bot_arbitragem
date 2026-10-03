@@ -251,7 +251,7 @@ test('consenso de 3+ exchanges remove venue isolada com preço divergente', () =
     },
     budgetUsdt:100,
     costs:{
-      exchangeFeePct:{binance:0.1,bybit:0.1,okx:0.4,gate:0.1},
+      exchangeFeePct:{binance:0.1,bybit:0.1,okx:0.1,gate:0.1},
       reservePct:0.05,
       recompositionUsdt:0.5,
     },
