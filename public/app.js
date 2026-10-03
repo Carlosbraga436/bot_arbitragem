@@ -96,14 +96,14 @@ async function bootstrap() {
 
   const data = await r.json();
   state.catalog = data.candidates || [];
-  state.commonActiveUsdt = Number(data?.exchangeUniverse?.commonActiveUsdt) || state.catalog.length;
+  state.commonActiveUsdt = Number(data?.exchangeUniverse?.candidateUsdt ?? data?.exchangeUniverse?.commonActiveUsdt) || state.catalog.length;
 
   const bySymbol = new Map(state.catalog.map((x) => [x.symbol, x]));
   const runtimeSymbols = Array.isArray(data.monitoredSymbols) ? data.monitoredSymbols : [];
   state.monitored = runtimeSymbols.map((symbol) => bySymbol.get(symbol)).filter(Boolean);
 
   $('identity').textContent = `${state.monitored.length} pares`;
-  $('summary').textContent = `${state.monitored.length} monitoradas de ${state.commonActiveUsdt} pares USDT comuns`;
+  $('summary').textContent = `${state.monitored.length} pares USDT sendo sondados nas duas exchanges`;
 
   if (!state.monitored.length) throw new Error('Nenhum par spot USDT comum confirmado nos catálogos.');
 
