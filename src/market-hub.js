@@ -8,6 +8,14 @@ export const DEFAULT_SYMBOLS = [
 
 const BINANCE_WS = 'wss://stream.binance.com:443/stream';
 const BYBIT_WS = 'wss://stream.bybit.com/v5/public/spot';
+export const BYBIT_MAX_ARGS_PER_SUBSCRIBE = 10;
+
+export function chunkTopics(items, size = BYBIT_MAX_ARGS_PER_SUBSCRIBE) {
+  const n = Math.max(1, Number(size) || BYBIT_MAX_ARGS_PER_SUBSCRIBE);
+  const out = [];
+  for (let i = 0; i < items.length; i += n) out.push(items.slice(i, i + n));
+  return out;
+}
 
 function parseMessage(event) {
   if (typeof event?.data === 'string') return JSON.parse(event.data);
@@ -85,12 +93,16 @@ export function createMarketHub({ symbols = DEFAULT_SYMBOLS, logger = console } 
     sockets.bybit = ws;
 
     ws.onopen = () => {
-      logger.info('[market] Bybit WS conectado');
-      setStatus('bybit', 'connected');
-      ws.send(JSON.stringify({
-        op: 'subscribe',
-        args: symbols.map((s) => `orderbook.50.${s}`),
-      }));
+      logger.info('[market] Bybit WS conectado; assinando tópicos');
+      setStatus('bybit', 'connecting');
+      const topics = symbols.map((s) => `orderbook.50.${s}`);
+      chunkTopics(topics).forEach((args, index) => {
+        ws.send(JSON.stringify({
+          req_id: `ob-${index + 1}`,
+          op: 'subscribe',
+          args,
+        }));
+      });
       bybitHeartbeat = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ op: 'ping' }));
       }, 20_000);
@@ -108,6 +120,18 @@ export function createMarketHub({ symbols = DEFAULT_SYMBOLS, logger = console } 
     ws.onmessage = (event) => {
       try {
         const msg = parseMessage(event);
+
+        if (msg?.op === 'subscribe') {
+          if (msg.success === false) {
+            setStatus('bybit', 'error', msg.ret_msg || 'subscribe_failed');
+            logger.warn('[market] Bybit subscribe falhou', msg.req_id || '', msg.ret_msg || '');
+          } else {
+            logger.info('[market] Bybit subscribe OK', msg.req_id || '');
+          }
+          return;
+        }
+
+        if (msg?.op === 'ping' || msg?.ret_msg === 'pong') return;
         if (!msg?.topic?.startsWith('orderbook.')) return;
         const data = msg.data;
         if (!data?.s || !Array.isArray(data?.b) || !Array.isArray(data?.a)) return;
