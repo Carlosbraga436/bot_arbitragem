@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyOrderBookMessage, evaluatePair, evaluateRoute, topPositive } from '../src/core.js';
-import { chunkTopics, createMarketHub } from '../src/market-hub.js';
+import { chunkTopics, createMarketHub, selectConfirmedSymbols } from '../src/market-hub.js';
 
 const now = 1_800_000_000_000;
 const book = (bid, ask, qty=1000, ts=now) => ({ bids:[[String(bid),String(qty)]], asks:[[String(ask),String(qty)]], ts });
@@ -69,4 +69,18 @@ test('Bybit spot divide 15 tópicos em lotes de no máximo 10', () => {
   assert.deepEqual(chunks.map((x) => x.length), [10, 5]);
   assert.deepEqual(chunks.flat(), topics);
   assert.ok(chunks.every((x) => x.length <= 10));
+});
+
+
+test('seleção monitorada usa somente identidades confirmadas e preenche até o limite', () => {
+  const candidates = [
+    { symbol:'BTCUSDT', identityConfirmed:true },
+    { symbol:'ETHUSDT', identityConfirmed:true },
+    { symbol:'TONUSDT', identityConfirmed:false },
+    { symbol:'SHIBUSDT', identityConfirmed:true },
+    { symbol:'AAVEUSDT', identityConfirmed:true },
+  ];
+  const selected = selectConfirmedSymbols(candidates, ['BTCUSDT','ETHUSDT','TONUSDT','SHIBUSDT'], 4);
+  assert.deepEqual(selected, ['BTCUSDT','ETHUSDT','SHIBUSDT','AAVEUSDT']);
+  assert.ok(!selected.includes('TONUSDT'));
 });
