@@ -199,15 +199,22 @@ export function evaluateRoute({
     };
   }
 
-  const tradingFees = bought.quoteSpent * buyFeeRate + sold.quoteReceived * sellFeeRate;
+  const buyTradingFee = bought.quoteSpent * buyFeeRate;
+  const sellTradingFee = sold.quoteReceived * sellFeeRate;
+  const tradingFees = buyTradingFee + sellTradingFee;
   const reserve = (bought.quoteSpent + sold.quoteReceived) * reserveRate;
   const recomposition = Math.max(0, Number(costs.recompositionUsdt) || 0);
-  const netPnl = grossPnl - tradingFees - reserve - recomposition;
+
+  // Eligibility is based on the economics of the trade that can be executed now.
+  // Inventory rebalancing is operational and can be batched across multiple trades,
+  // so its estimate is reported separately instead of blocking every individual trade.
+  const executionNetPnl = grossPnl - tradingFees - reserve;
+  const netAfterRebalance = executionNetPnl - recomposition;
   const totalCapital = budget * 2;
 
   return {
-    eligible: netPnl > 0,
-    reason: netPnl > 0 ? 'positive_net' : 'non_positive_net',
+    eligible: executionNetPnl > 0,
+    reason: executionNetPnl > 0 ? 'positive_net' : 'non_positive_net',
     symbol,
     buyExchange,
     sellExchange,
@@ -217,12 +224,19 @@ export function evaluateRoute({
     sellVwap: sold.vwap,
     grossPnlUsdt: grossPnl,
     grossSpreadPct,
+    buyFeePct: exchangeFeePct(buyExchange, costs),
+    sellFeePct: exchangeFeePct(sellExchange, costs),
+    buyTradingFeeUsdt: buyTradingFee,
+    sellTradingFeeUsdt: sellTradingFee,
     tradingFeesUsdt: tradingFees,
     reserveUsdt: reserve,
     recompositionUsdt: recomposition,
-    netPnlUsdt: netPnl,
-    netPctOnBuy: (netPnl / budget) * 100,
-    roiOnTotalCapitalPct: (netPnl / totalCapital) * 100,
+    executionNetPnlUsdt: executionNetPnl,
+    netAfterRebalanceUsdt: netAfterRebalance,
+    netPnlUsdt: executionNetPnl,
+    netPctOnBuy: (executionNetPnl / budget) * 100,
+    roiOnTotalCapitalPct: (executionNetPnl / totalCapital) * 100,
+    eligibilityModel: 'execution_net_before_rebalance',
     buyAgeMs,
     sellAgeMs,
     skewMs,
