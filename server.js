@@ -7,8 +7,8 @@ const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
 const PORT = Number(process.env.PORT || 8787);
 
-const BINANCE_BASE = 'https://api.binance.com';
-const BYBIT_BASE = 'https://api.bybit.com';
+const BINANCE_BASES = ['https://data-api.binance.vision','https://api.binance.com','https://api1.binance.com','https://api2.binance.com'];
+const BYBIT_BASES = ['https://api.bybit.com','https://api.bytick.com'];
 const REQUEST_TIMEOUT_MS = 8_000;
 
 const CANONICAL = [
@@ -39,11 +39,25 @@ async function fetchJson(url) {
   }
 }
 
+async function fetchFirst(bases, path) {
+  const errors = [];
+  for (const base of bases) {
+    try {
+      return { base, data: await fetchJson(`${base}${path}`) };
+    } catch (error) {
+      errors.push(`${base}: ${error?.message || error}`);
+    }
+  }
+  throw new Error(errors.join(' | '));
+}
+
 async function getCatalog() {
-  const [binance, bybit] = await Promise.all([
-    fetchJson(`${BINANCE_BASE}/api/v3/exchangeInfo`),
-    fetchJson(`${BYBIT_BASE}/v5/market/instruments-info?category=spot`),
+  const [binanceResult, bybitResult] = await Promise.all([
+    fetchFirst(BINANCE_BASES, '/api/v3/exchangeInfo'),
+    fetchFirst(BYBIT_BASES, '/v5/market/instruments-info?category=spot'),
   ]);
+  const binance = binanceResult.data;
+  const bybit = bybitResult.data;
 
   const bMap = new Map((binance.symbols || []).map((x) => [x.symbol, x]));
   const yList = bybit?.result?.list || [];
@@ -65,6 +79,7 @@ async function getCatalog() {
 
   return {
     generatedAt: Date.now(),
+    sources: { binance: binanceResult.base, bybit: bybitResult.base },
     candidates,
     confirmed: candidates.filter((x) => x.identityConfirmed).length,
     pending: candidates.filter((x) => !x.identityConfirmed).length,
@@ -100,8 +115,8 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/reference') {
       return json(res, 200, {
         mode: 'public-market-data-only',
-        binanceRest: BINANCE_BASE,
-        bybitRest: BYBIT_BASE,
+        binanceRest: BINANCE_BASES,
+        bybitRest: BYBIT_BASES,
         binanceWs: 'wss://stream.binance.com:9443/stream',
         bybitWs: 'wss://stream.bybit.com/v5/public/spot',
       });
