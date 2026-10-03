@@ -21,10 +21,11 @@
 
 ## Arquitetura
 
-- `server.js`: servidor local e proxy de catálogos REST públicos.
-- `public/app.js`: conexão WebSocket pública com Binance e Bybit + UI.
+- `server.js`: servidor Node, proxy de catálogos REST e API same-origin do radar.
+- `src/market-hub.js`: mantém WebSockets server-side com Binance e Bybit, reconstrói o livro Bybit e expõe snapshots ao app.
+- `public/app.js`: UI mobile/web; consulta `/api/market` no próprio servidor a cada 1s, sem depender de WebSockets diretos do navegador.
 - `src/core.js`: motor determinístico de liquidez, custos, freshness e ranking.
-- `tests/core.test.js`: regressões das invariantes críticas.
+- `tests/core.test.js`: regressões das invariantes críticas e baseline segura do market hub.
 
 ## Segurança lógica
 
@@ -33,3 +34,11 @@ A aplicação não implementa endpoints de ordem nem carrega credenciais. Falha 
 ## Limitação atual
 
 A identidade confirma equivalência operacional por registro canônico + catálogos de spot das exchanges. Rede de saque, depósito, taxa de retirada e disponibilidade de transferência ainda não são verificadas. Por isso os resultados são **estimativas de spread líquido de execução simultânea com inventário pré-posicionado**, não arbitragem de transferência garantida.
+
+
+## Preview público de recuperação
+
+- Região: Frankfurt.
+- URL: https://radar-cripto-carlos-frankfurt.onrender.com
+- O preview é de validação; não equivale a uma promoção da branch para estável.
+- Evidência de backend em 2026-10-03: Binance WebSocket conectado, Bybit WebSocket conectado e 24/25 identidades confirmadas pelos catálogos REST.
