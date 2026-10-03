@@ -30,6 +30,39 @@ export function normalizeBook(book) {
   return { bids, asks, ts };
 }
 
+export function applyOrderBookMessage(previous, update, type = 'snapshot', depth = 50) {
+  if (!update || !Array.isArray(update.bids) || !Array.isArray(update.asks)) return null;
+
+  const clean = (levels) => levels
+    .map(([p, q]) => [finitePositive(p), Number(q)])
+    .filter(([p, q]) => p && Number.isFinite(q) && q >= 0);
+
+  const makeSide = (previousLevels, changes, descending) => {
+    const map = new Map();
+    if (type !== 'snapshot') {
+      for (const [p, q] of clean(previousLevels || [])) {
+        if (q > 0) map.set(p, q);
+      }
+    }
+    for (const [p, q] of clean(changes)) {
+      if (q === 0) map.delete(p);
+      else map.set(p, q);
+    }
+    return [...map.entries()]
+      .sort((a, b) => descending ? b[0] - a[0] : a[0] - b[0])
+      .slice(0, depth);
+  };
+
+  if (type !== 'snapshot' && !previous) return null;
+  const ts = Number(update.ts);
+  if (!Number.isFinite(ts)) return null;
+  return {
+    bids: makeSide(previous?.bids, update.bids, true),
+    asks: makeSide(previous?.asks, update.asks, false),
+    ts,
+  };
+}
+
 export function consumeQuote(asks, quoteBudget) {
   let quoteLeft = finitePositive(quoteBudget);
   if (!quoteLeft) return null;
