@@ -34,11 +34,11 @@
 
     <section class="card">
       <div class="sectionHead"><div><h2 id="tableTitle">Top 5 oportunidades elegíveis</h2><p id="summary">Descobrindo pares comuns…</p></div><div class="badge" id="identity">0 comuns</div></div>
-      <div class="costs">Taxas taker modeladas: Binance 0,10% · Bybit 0,10% · OKX Brasil 0,40% · Gate.io 0,10% · KuCoin conforme classe do par (fallback conservador 0,30%) · reserva 0,05% por ponta · recomposição 0,50 USDT. Oportunidades só entram no Top 5 com liquidez suficiente nas duas pontas. <span id="breakEven"></span></div>
+      <div class="costs">Taxas taker modeladas: Binance 0,10% · Bybit 0,10% · OKX Brasil 0,40% · Gate.io 0,10% · KuCoin conforme classe do par (fallback conservador 0,30%) · reserva 0,05% por ponta. A oportunidade entra no Top 5 pelo líquido da execução. A recomposição estimada de 0,50 USDT aparece separadamente como cenário pós-trade. <span id="breakEven"></span></div>
       <div class="tableWrap"><table><thead><tr><th>Par</th><th>Direção</th><th>Spread</th><th>Líquido</th><th>Status</th></tr></thead><tbody id="rows"><tr><td colspan="5">Aguardando…</td></tr></tbody></table></div>
     </section>
 
-    <footer>Sem depósito · sem API key · sem envio de ordens · 5 exchanges · universo USDT dinâmico · Top 5 exige liquidez nas duas pontas e lucro líquido após custos.</footer>
+    <footer>Sem depósito · sem API key · sem envio de ordens · 5 exchanges · universo USDT dinâmico · Top 5 exige liquidez nas duas pontas e lucro líquido da execução após taxas + reserva; recomposição é cenário separado.</footer>
   </main>
   <script type="module" src="/app.js"></script>
 </body>
