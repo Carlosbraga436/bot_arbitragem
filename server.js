@@ -276,7 +276,9 @@ function radarSnapshot(runtime,budgetUsdt=100) {
 
   const evaluated=evaluateRuntime(runtime,budget);
   const finite=evaluated.results.filter((r)=>Number.isFinite(r?.netPnlUsdt));
-  const positives=topPositive(evaluated.results,5);
+  const allPositives=evaluated.results
+    .filter((r)=>r?.eligible && Number.isFinite(r?.netPnlUsdt) && r.netPnlUsdt>0);
+  const positives=topPositive(allPositives,5);
   const nearest=[...finite]
     .filter((r)=>!r?.eligible)
     .sort((a,b)=>(b.netPnlUsdt??-Infinity)-(a.netPnlUsdt??-Infinity))
@@ -297,7 +299,7 @@ function radarSnapshot(runtime,budgetUsdt=100) {
     exchangeBooks:evaluated.exchangeBooks,
     pairsWith2PlusVenues:evaluated.pairsWith2PlusVenues,
     liquidResults:finite.length,
-    positiveNet:positives.length,
+    positiveNet:allPositives.length,
     top5:positives,
     nearest5:nearest,
     reasonCounts,
@@ -348,6 +350,9 @@ function marketDiagnostics(runtime,budgetUsdt=100) {
       grossPnlUsdt:topNet.grossPnlUsdt,
       netPnlUsdt:topNet.netPnlUsdt,
       netPctOnBuy:topNet.netPctOnBuy,
+      requestedBudgetUsdt:topNet.requestedBudgetUsdt,
+      executableBudgetUsdt:topNet.executableBudgetUsdt,
+      liquidityLimited:topNet.liquidityLimited,
     }:null,
     modeledCosts:DEFAULT_COSTS,
   };
