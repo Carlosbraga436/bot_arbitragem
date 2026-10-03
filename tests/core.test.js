@@ -190,13 +190,14 @@ test('universo multiexchange une pares USDT ativos sem duplicar símbolo', () =>
   assert.equal(btc.venues.gate,true);
 });
 
-test('market hub seguro expõe as quatro exchanges antes de iniciar', () => {
+test('market hub seguro expõe as cinco exchanges antes de iniciar', () => {
   const hub = createMarketHub({ symbols:['BTCUSDT'], gateSymbols:['BTCUSDT'], logger:{info(){},warn(){}} });
   const snap = hub.snapshot();
-  assert.deepEqual(Object.keys(snap.status), ['binance','bybit','okx','gate']);
-  assert.deepEqual(Object.keys(snap.books), ['binance','bybit','okx','gate']);
+  assert.deepEqual(Object.keys(snap.status), ['binance','bybit','okx','gate','kucoin']);
+  assert.deepEqual(Object.keys(snap.books), ['binance','bybit','okx','gate','kucoin']);
   assert.equal(snap.status.okx.state,'idle');
   assert.equal(snap.status.gate.state,'idle');
+  assert.equal(snap.status.kucoin.state,'idle');
 });
 
 
