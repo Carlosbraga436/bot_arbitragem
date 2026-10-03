@@ -1,6 +1,14 @@
 export const DEFAULT_COSTS = Object.freeze({
+  exchangeFeePct: Object.freeze({
+    binance: 0.10,
+    bybit: 0.10,
+    okx: 0.40,
+    gate: 0.10,
+  }),
   binanceFeePct: 0.10,
   bybitFeePct: 0.10,
+  okxFeePct: 0.40,
+  gateFeePct: 0.10,
   reservePct: 0.05,
   recompositionUsdt: 0.50,
 });
@@ -116,6 +124,14 @@ function pctToRate(pct) {
   return Number.isFinite(n) && n >= 0 ? n / 100 : 0;
 }
 
+export function exchangeFeePct(exchange, costs = DEFAULT_COSTS) {
+  const mapped = Number(costs?.exchangeFeePct?.[exchange]);
+  if (Number.isFinite(mapped) && mapped >= 0) return mapped;
+  const legacy = Number(costs?.[`${exchange}FeePct`]);
+  if (Number.isFinite(legacy) && legacy >= 0) return legacy;
+  return 0;
+}
+
 export function evaluateRoute({
   symbol,
   identityConfirmed,
@@ -154,8 +170,8 @@ export function evaluateRoute({
     return { eligible: false, reason: 'insufficient_sell_liquidity', symbol, fillPct: sold?.fillPct ?? 0 };
   }
 
-  const buyFeeRate = pctToRate(buyExchange === 'binance' ? costs.binanceFeePct : costs.bybitFeePct);
-  const sellFeeRate = pctToRate(sellExchange === 'binance' ? costs.binanceFeePct : costs.bybitFeePct);
+  const buyFeeRate = pctToRate(exchangeFeePct(buyExchange, costs));
+  const sellFeeRate = pctToRate(exchangeFeePct(sellExchange, costs));
   const reserveRate = pctToRate(costs.reservePct);
   const grossPnl = sold.quoteReceived - bought.quoteSpent;
   const tradingFees = bought.quoteSpent * buyFeeRate + sold.quoteReceived * sellFeeRate;
@@ -187,12 +203,51 @@ export function evaluateRoute({
   };
 }
 
+export function evaluateAcrossExchanges({
+  symbol,
+  identityConfirmed,
+  booksByExchange = {},
+  budgetUsdt,
+  costs = DEFAULT_COSTS,
+  rules = DEFAULT_RULES,
+  now = Date.now(),
+}) {
+  const entries = Object.entries(booksByExchange).filter(([, book]) => book);
+  if (entries.length < 2) return { eligible:false, reason:'invalid_data', symbol };
+
+  const routes = [];
+  for (const [buyExchange, buyBook] of entries) {
+    for (const [sellExchange, sellBook] of entries) {
+      if (buyExchange === sellExchange) continue;
+      routes.push(evaluateRoute({
+        symbol,
+        identityConfirmed,
+        buyExchange,
+        sellExchange,
+        buyBook,
+        sellBook,
+        budgetUsdt,
+        costs,
+        rules,
+        now,
+      }));
+    }
+  }
+
+  return routes.sort((a, b) => (b.netPnlUsdt ?? -Infinity) - (a.netPnlUsdt ?? -Infinity))[0]
+    || { eligible:false, reason:'invalid_data', symbol };
+}
+
 export function evaluatePair({ symbol, identityConfirmed, binanceBook, bybitBook, budgetUsdt, costs, rules, now }) {
-  const routes = [
-    evaluateRoute({ symbol, identityConfirmed, buyExchange: 'binance', sellExchange: 'bybit', buyBook: binanceBook, sellBook: bybitBook, budgetUsdt, costs, rules, now }),
-    evaluateRoute({ symbol, identityConfirmed, buyExchange: 'bybit', sellExchange: 'binance', buyBook: bybitBook, sellBook: binanceBook, budgetUsdt, costs, rules, now }),
-  ];
-  return routes.sort((a, b) => (b.netPnlUsdt ?? -Infinity) - (a.netPnlUsdt ?? -Infinity))[0];
+  return evaluateAcrossExchanges({
+    symbol,
+    identityConfirmed,
+    booksByExchange: { binance: binanceBook, bybit: bybitBook },
+    budgetUsdt,
+    costs,
+    rules,
+    now,
+  });
 }
 
 export function topPositive(results, limit = 5) {
