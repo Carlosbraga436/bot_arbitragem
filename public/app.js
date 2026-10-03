@@ -6,7 +6,7 @@ import {
   topPositive,
 } from '/src/core.js';
 
-const EXCHANGES = ['binance','bybit','okx','gate'];
+const EXCHANGES = ['binance','bybit','okx','gate','kucoin'];
 
 const state = {
   budget:100,
@@ -36,12 +36,23 @@ const directionLabel=(r)=>r?.buyExchange&&r?.sellExchange
   ? `${exchangeLabel(r.buyExchange)} → ${exchangeLabel(r.sellExchange)}`
   : '—';
 
-function routeBreakEvenPct(r) {
+function costsForAsset(asset) {
+  return {
+    ...DEFAULT_COSTS,
+    exchangeFeePct:{
+      ...DEFAULT_COSTS.exchangeFeePct,
+      ...(asset?.feePctByExchange || {}),
+    },
+  };
+}
+
+function routeBreakEvenPct(r, asset = null) {
   if (!r?.buyExchange || !r?.sellExchange) return null;
-  return exchangeFeePct(r.buyExchange,DEFAULT_COSTS)
-    + exchangeFeePct(r.sellExchange,DEFAULT_COSTS)
-    + (DEFAULT_COSTS.reservePct*2)
-    + ((DEFAULT_COSTS.recompositionUsdt/state.budget)*100);
+  const costs=costsForAsset(asset);
+  return exchangeFeePct(r.buyExchange,costs)
+    + exchangeFeePct(r.sellExchange,costs)
+    + (costs.reservePct*2)
+    + ((costs.recompositionUsdt/state.budget)*100);
 }
 
 function setStatus(exchange,kind,text) {
@@ -122,7 +133,7 @@ async function bootstrap() {
   state.monitored=runtimeSymbols.map((symbol)=>bySymbol.get(symbol)).filter(Boolean);
 
   $('identity').textContent=`${state.monitored.length} sondados`;
-  $('summary').textContent=`${state.monitored.length} pares USDT sendo sondados em até 4 exchanges`;
+  $('summary').textContent=`${state.monitored.length} pares USDT sendo sondados em até 5 exchanges`;
 
   if (!state.monitored.length) throw new Error('Nenhum par spot USDT encontrado nos catálogos públicos.');
   await startPolling();
@@ -143,7 +154,7 @@ function currentResults() {
     identityConfirmed:asset.identityConfirmed,
     booksByExchange:booksForSymbol(asset.symbol),
     budgetUsdt:state.budget,
-    costs:DEFAULT_COSTS,
+    costs:costsForAsset(asset),
     rules:DEFAULT_RULES,
     now,
   }));
@@ -170,7 +181,7 @@ function render() {
 
   if (best) {
     const grossPct=spreadPct(best);
-    const breakEven=routeBreakEvenPct(best);
+    const breakEven=routeBreakEvenPct(best,state.catalog.find((x)=>x.symbol===best.symbol));
     $('bestLabel').textContent='MELHOR OPORTUNIDADE ELEGÍVEL';
     $('best').innerHTML=`
       <h2>${best.symbol} <span class="profit">${money(best.netPnlUsdt)}</span></h2>
@@ -183,7 +194,7 @@ function render() {
       <p>Comprar em ${exchangeLabel(best.buyExchange)} @ ${fmt(best.buyVwap,8)} · vender em ${exchangeLabel(best.sellExchange)} @ ${fmt(best.sellVwap,8)} · ROI capital ${fmt(best.roiOnTotalCapitalPct,3)}%.</p>`;
   } else if (bestObserved) {
     const grossPct=spreadPct(bestObserved);
-    const breakEven=routeBreakEvenPct(bestObserved);
+    const breakEven=routeBreakEvenPct(bestObserved,state.catalog.find((x)=>x.symbol===bestObserved.symbol));
     const gapPct=Math.max(0,breakEven-grossPct);
     $('bestLabel').textContent='MELHOR CANDIDATA AGORA';
     $('best').innerHTML=`
@@ -207,7 +218,7 @@ function render() {
         const cls=r.eligible?'pos':'neg';
         const status=r.eligible?'elegível':'abaixo do breakeven';
         const grossPct=spreadPct(r);
-        const breakEven=routeBreakEvenPct(r);
+        const breakEven=routeBreakEvenPct(r,state.catalog.find((x)=>x.symbol===r.symbol));
         return `<tr>
           <td><b>${r.symbol}</b></td>
           <td><b class="routeText">${directionLabel(r)}</b><small class="priceLine">Compra ${fmt(r.buyVwap,8)} · Venda ${fmt(r.sellVwap,8)}</small></td>
