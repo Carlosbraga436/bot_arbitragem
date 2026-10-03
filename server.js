@@ -8,6 +8,7 @@ import {
   MAX_MONITORED_SYMBOLS,
   selectConfirmedSymbols,
 } from './src/market-hub.js';
+import { DEFAULT_COSTS, DEFAULT_RULES, evaluatePair } from './src/core.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
@@ -139,6 +140,62 @@ async function ensureRuntime() {
   return runtimePromise;
 }
 
+
+function marketDiagnostics(runtime, budgetUsdt = 100) {
+  const snap = runtime.marketHub.snapshot();
+  const bySymbol = new Map(runtime.catalog.candidates.map((x) => [x.symbol, x]));
+  const now = Date.now();
+
+  const results = snap.symbols.map((symbol) => {
+    const asset = bySymbol.get(symbol);
+    return evaluatePair({
+      symbol,
+      identityConfirmed: Boolean(asset?.identityConfirmed),
+      binanceBook: snap.books.binance[symbol],
+      bybitBook: snap.books.bybit[symbol],
+      budgetUsdt,
+      costs: DEFAULT_COSTS,
+      rules: DEFAULT_RULES,
+      now,
+    });
+  });
+
+  const reasonCounts = {};
+  for (const r of results) reasonCounts[r.reason] = (reasonCounts[r.reason] || 0) + 1;
+
+  const finite = results.filter((r) => Number.isFinite(r.netPnlUsdt));
+  const topGross = [...finite].sort((a,b) => (b.grossPnlUsdt ?? -Infinity) - (a.grossPnlUsdt ?? -Infinity))[0] || null;
+  const topNet = [...finite].sort((a,b) => (b.netPnlUsdt ?? -Infinity) - (a.netPnlUsdt ?? -Infinity))[0] || null;
+
+  return {
+    generatedAt: now,
+    budgetUsdt,
+    monitored: snap.symbols.length,
+    binanceBooks: Object.keys(snap.books.binance).length,
+    bybitBooks: Object.keys(snap.books.bybit).length,
+    finiteResults: finite.length,
+    positiveNet: finite.filter((r) => r.netPnlUsdt > 0).length,
+    reasonCounts,
+    topGross: topGross ? {
+      symbol: topGross.symbol,
+      buyExchange: topGross.buyExchange,
+      sellExchange: topGross.sellExchange,
+      grossPnlUsdt: topGross.grossPnlUsdt,
+      grossPctOnBuy: (topGross.grossPnlUsdt / budgetUsdt) * 100,
+      netPnlUsdt: topGross.netPnlUsdt,
+    } : null,
+    topNet: topNet ? {
+      symbol: topNet.symbol,
+      buyExchange: topNet.buyExchange,
+      sellExchange: topNet.sellExchange,
+      grossPnlUsdt: topNet.grossPnlUsdt,
+      netPnlUsdt: topNet.netPnlUsdt,
+      netPctOnBuy: topNet.netPctOnBuy,
+    } : null,
+    modeledCosts: DEFAULT_COSTS,
+  };
+}
+
 async function serveStatic(pathname, res) {
   const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
   const safe = normalize(rel).replace(/^(\.\.(\/|\\|$))+/, '');
@@ -183,6 +240,12 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/market') {
       const { marketHub } = await ensureRuntime();
       return json(res, 200, marketHub.snapshot());
+    }
+
+    if (url.pathname === '/api/diagnostics') {
+      const runtime = await ensureRuntime();
+      const budget = Number(url.searchParams.get('budget') || 100);
+      return json(res, 200, marketDiagnostics(runtime, Number.isFinite(budget) && budget > 0 ? budget : 100));
     }
 
     if (url.pathname === '/api/reconnect' && req.method === 'POST') {
