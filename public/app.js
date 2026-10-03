@@ -127,19 +127,46 @@ function currentResults() {
 function render() {
   const results = currentResults();
   const positives = topPositive(results,5);
-  const liquidComparable = results.filter((r) => Number.isFinite(r?.netPnlUsdt)).length;
+  const finite = results.filter((r) => Number.isFinite(r?.netPnlUsdt));
+  const liquidComparable = finite.length;
+  const liveBoth = state.monitored.filter((asset) =>
+    state.books.binance.has(asset.symbol) && state.books.bybit.has(asset.symbol)
+  ).length;
+  const nearest = [...finite]
+    .sort((a,b)=>(b.netPnlUsdt??-Infinity)-(a.netPnlUsdt??-Infinity))
+    .slice(0,5);
 
+  const breakEvenApproxPct =
+    DEFAULT_COSTS.binanceFeePct +
+    DEFAULT_COSTS.bybitFeePct +
+    (DEFAULT_COSTS.reservePct * 2) +
+    ((DEFAULT_COSTS.recompositionUsdt / state.budget) * 100);
+
+  $('identity').textContent = `${liveBoth} comuns`;
   $('summary').textContent =
-    `${state.monitored.length} monitoradas · ${liquidComparable} com liquidez suficiente agora · ${positives.length} positivas elegíveis`;
+    `${state.monitored.length} sondadas · ${liveBoth} com cotação nas duas · ${liquidComparable} com liquidez p/ ${state.budget.toLocaleString('pt-BR')} USDT · ${positives.length} elegíveis`;
+  $('breakEven').textContent = `Breakeven aproximado no modelo atual: ${fmt(breakEvenApproxPct,3)}% de spread bruto.`;
 
   const best = positives[0];
-  $('best').innerHTML = best
-    ? `<h2>${best.symbol} <span class="profit">${money(best.netPnlUsdt)}</span></h2><p>Comprar ${best.buyExchange} @ ${fmt(best.buyVwap,8)} · vender ${best.sellExchange} @ ${fmt(best.sellVwap,8)} · ROI capital ${fmt(best.roiOnTotalCapitalPct,3)}%</p>`
-    : '<h2>—</h2><p>Nenhuma oportunidade líquida positiva com liquidez suficiente no momento.</p>';
+  const bestObserved = nearest[0];
+  if (best) {
+    $('best').innerHTML = `<h2>${best.symbol} <span class="profit">${money(best.netPnlUsdt)}</span></h2><p>Comprar ${best.buyExchange} @ ${fmt(best.buyVwap,8)} · vender ${best.sellExchange} @ ${fmt(best.sellVwap,8)} · ROI capital ${fmt(best.roiOnTotalCapitalPct,3)}%</p>`;
+  } else if (bestObserved) {
+    const grossPct = (bestObserved.grossPnlUsdt / state.budget) * 100;
+    $('best').innerHTML = `<h2>${bestObserved.symbol}</h2><p>Melhor candidata agora: spread bruto ${grossPct >= 0 ? '+' : ''}${fmt(grossPct,3)}%, líquido ${money(bestObserved.netPnlUsdt)}. Ainda abaixo do breakeven aproximado de ${fmt(breakEvenApproxPct,3)}%.</p>`;
+  } else {
+    $('best').innerHTML = '<h2>—</h2><p>Aguardando pares com cotação recente e liquidez suficiente nas duas exchanges.</p>';
+  }
 
-  $('rows').innerHTML = positives.length
-    ? positives.map((r) => `<tr><td><b>${r.symbol}</b></td><td>${r.buyExchange}</td><td>${r.sellExchange}</td><td>${fmt(r.buyVwap,8)}</td><td>${fmt(r.sellVwap,8)}</td><td class="pos">${money(r.netPnlUsdt)}</td><td class="pos">${fmt(r.roiOnTotalCapitalPct,3)}%</td><td>elegível</td></tr>`).join('')
-    : '<tr><td colspan="8">Nenhuma oportunidade líquida positiva elegível agora.</td></tr>';
+  const shown = positives.length ? positives : nearest;
+  $('tableTitle').textContent = positives.length ? 'Top 5 oportunidades elegíveis' : '5 mais próximas do breakeven';
+  $('rows').innerHTML = shown.length
+    ? shown.map((r) => {
+        const cls = r.eligible ? 'pos' : 'neg';
+        const status = r.eligible ? 'elegível' : 'não elegível';
+        return `<tr><td><b>${r.symbol}</b></td><td>${r.buyExchange}</td><td>${r.sellExchange}</td><td>${fmt(r.buyVwap,8)}</td><td>${fmt(r.sellVwap,8)}</td><td class="${cls}">${money(r.netPnlUsdt)}</td><td class="${cls}">${fmt(r.roiOnTotalCapitalPct,3)}%</td><td>${status}</td></tr>`;
+      }).join('')
+    : '<tr><td colspan="8">Nenhum par com dados e liquidez completos neste instante.</td></tr>';
 }
 
 for (const btn of document.querySelectorAll('[data-budget]')) {
