@@ -2,23 +2,26 @@ import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createMarketHub, selectConfirmedSymbols } from './src/market-hub.js';
+import {
+  buildCommonUsdtMarkets,
+  createMarketHub,
+  MAX_MONITORED_SYMBOLS,
+  selectConfirmedSymbols,
+} from './src/market-hub.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
 const PORT = Number(process.env.PORT || 8787);
 
-const BINANCE_BASES = ['https://data-api.binance.vision','https://api.binance.com','https://api1.binance.com','https://api2.binance.com'];
+const BINANCE_BASES = [
+  'https://data-api.binance.vision',
+  'https://api.binance.com',
+  'https://api1.binance.com',
+  'https://api2.binance.com',
+];
 const BYBIT_BASES = ['https://api.bybit.com','https://api.bytick.com'];
-const REQUEST_TIMEOUT_MS = 8_000;
-
-const CANONICAL = [
-  ['BTC','Bitcoin'],['ETH','Ethereum'],['SOL','Solana'],['XRP','XRP'],['DOGE','Dogecoin'],
-  ['ADA','Cardano'],['AVAX','Avalanche'],['LINK','Chainlink'],['BCH','Bitcoin Cash'],['LTC','Litecoin'],
-  ['DOT','Polkadot'],['TRX','TRON'],['TON','Toncoin'],['SHIB','Shiba Inu'],['NEAR','NEAR Protocol'],
-  ['SUI','Sui'],['PEPE','Pepe'],['AAVE','Aave'],['UNI','Uniswap'],['ARB','Arbitrum'],
-  ['OP','Optimism'],['ETC','Ethereum Classic'],['ATOM','Cosmos'],['FIL','Filecoin'],['LUNC','Terra Luna Classic'],
-].map(([base, name]) => ({ base, name, symbol: `${base}USDT`, quote: 'USDT' }));
+const REQUEST_TIMEOUT_MS = 10_000;
+const APP_VERSION = '0.17.0-recovery.1';
 
 let runtimePromise = null;
 
@@ -36,7 +39,7 @@ async function fetchJson(url) {
   try {
     const r = await fetch(url, {
       signal: controller.signal,
-      headers: { 'user-agent': 'radar-cripto-carlos/0.16-recovery' },
+      headers: { 'user-agent': `radar-cripto-carlos/${APP_VERSION}` },
     });
     if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
     return await r.json();
@@ -58,47 +61,51 @@ async function fetchFirst(bases, path) {
 }
 
 async function getCatalog() {
-  const [binanceResult, bybitResult] = await Promise.all([
+  const [binanceInfoResult, bybitInfoResult, binanceTickerResult, bybitTickerResult] = await Promise.all([
     fetchFirst(BINANCE_BASES, '/api/v3/exchangeInfo'),
-    fetchFirst(BYBIT_BASES, '/v5/market/instruments-info?category=spot'),
+    fetchFirst(BYBIT_BASES, '/v5/market/instruments-info?category=spot&limit=1000'),
+    fetchFirst(BINANCE_BASES, '/api/v3/ticker/24hr'),
+    fetchFirst(BYBIT_BASES, '/v5/market/tickers?category=spot'),
   ]);
 
-  const binance = binanceResult.data;
-  const bybit = bybitResult.data;
-  const bMap = new Map((binance.symbols || []).map((x) => [x.symbol, x]));
-  const yList = bybit?.result?.list || [];
-  const yMap = new Map(yList.map((x) => [x.symbol, x]));
+  const binanceSymbols = binanceInfoResult.data?.symbols || [];
+  const bybitSymbols = bybitInfoResult.data?.result?.list || [];
+  const binanceTickers = Array.isArray(binanceTickerResult.data) ? binanceTickerResult.data : [];
+  const bybitTickers = bybitTickerResult.data?.result?.list || [];
 
-  const candidates = CANONICAL.map((asset) => {
-    const b = bMap.get(asset.symbol);
-    const y = yMap.get(asset.symbol);
-    const binanceActive = Boolean(
-      b && b.status === 'TRADING' && b.quoteAsset === 'USDT' && b.baseAsset === asset.base
-    );
-    const bybitActive = Boolean(
-      y && y.status === 'Trading' && y.quoteCoin === 'USDT' && y.baseCoin === asset.base
-    );
-
-    return {
-      ...asset,
-      binanceActive,
-      bybitActive,
-      identityConfirmed: binanceActive && bybitActive,
-      identityMethod: binanceActive && bybitActive
-        ? 'canonical_registry+exchange_catalogs'
-        : 'pending',
-    };
+  const candidates = buildCommonUsdtMarkets({
+    binanceSymbols,
+    bybitSymbols,
+    binanceTickers,
+    bybitTickers,
   });
+  const monitoredSymbols = selectConfirmedSymbols(candidates, MAX_MONITORED_SYMBOLS);
 
-  const monitoredSymbols = selectConfirmedSymbols(candidates, undefined, 15);
+  const binanceActiveUsdt = binanceSymbols.filter(
+    (x) => x?.status === 'TRADING' && x?.quoteAsset === 'USDT'
+  ).length;
+  const bybitActiveUsdt = bybitSymbols.filter(
+    (x) => x?.status === 'Trading' && x?.quoteCoin === 'USDT'
+  ).length;
 
   return {
     generatedAt: Date.now(),
-    sources: { binance: binanceResult.base, bybit: bybitResult.base },
+    version: APP_VERSION,
+    sources: {
+      binance: binanceInfoResult.base,
+      bybit: bybitInfoResult.base,
+    },
+    universeMode: 'dynamic_common_spot_usdt',
+    maxMonitored: MAX_MONITORED_SYMBOLS,
+    exchangeUniverse: {
+      binanceActiveUsdt,
+      bybitActiveUsdt,
+      commonActiveUsdt: candidates.length,
+    },
     candidates,
     monitoredSymbols,
-    confirmed: candidates.filter((x) => x.identityConfirmed).length,
-    pending: candidates.filter((x) => !x.identityConfirmed).length,
+    confirmed: candidates.length,
+    pending: 0,
   };
 }
 
@@ -107,14 +114,14 @@ async function ensureRuntime() {
     runtimePromise = (async () => {
       const catalog = await getCatalog();
       if (!catalog.monitoredSymbols.length) {
-        throw new Error('Nenhum mercado comum confirmado para monitoramento.');
+        throw new Error('Nenhum mercado spot USDT comum confirmado para monitoramento.');
       }
 
       const marketHub = createMarketHub({ symbols: catalog.monitoredSymbols });
       marketHub.start();
 
       console.log(
-        `[catalog] ${catalog.confirmed}/${catalog.candidates.length} identidades confirmadas; monitorando ${catalog.monitoredSymbols.join(',')}`
+        `[catalog] ${catalog.exchangeUniverse.commonActiveUsdt} pares comuns USDT; monitorando ${catalog.monitoredSymbols.length}/${catalog.maxMonitored}`
       );
 
       return { catalog, marketHub };
@@ -158,7 +165,7 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         mode: 'simulation-only',
         ordersEnabled: false,
-        version: '0.16.0-recovery.1',
+        version: APP_VERSION,
       });
     }
 
@@ -182,11 +189,14 @@ const server = http.createServer(async (req, res) => {
       const { catalog } = await ensureRuntime();
       return json(res, 200, {
         mode: 'public-market-data-only',
+        version: APP_VERSION,
+        universeMode: catalog.universeMode,
         binanceRest: BINANCE_BASES,
         bybitRest: BYBIT_BASES,
-        binanceWs: 'wss://stream.binance.com:443/stream',
+        binanceWs: 'wss://stream.binance.com:443/ws',
         bybitWs: 'wss://stream.bybit.com/v5/public/spot',
-        monitoredSymbols: catalog.monitoredSymbols,
+        monitoredCount: catalog.monitoredSymbols.length,
+        commonActiveUsdt: catalog.exchangeUniverse.commonActiveUsdt,
       });
     }
 
