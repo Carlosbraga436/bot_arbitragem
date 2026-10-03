@@ -333,3 +333,42 @@ test('rota KuCoin usa taxa específica do par quando fornecida', () => {
   assert.equal(r.sellExchange,'gate');
   assert.ok(r.tradingFeesUsdt > 0.39);
 });
+
+
+test('catálogo não sobrescreve taxa padrão com zero quando feePct é null', () => {
+  const markets = buildMultiExchangeUniverse({
+    bybitSymbols:[
+      {symbol:'BTCUSDT',baseCoin:'BTC',quoteCoin:'USDT',status:'Trading'},
+    ],
+    okxSymbols:[
+      {instId:'BTC-USDT',baseCcy:'BTC',quoteCcy:'USDT',state:'live'},
+    ],
+    gateSymbols:[
+      {id:'BTC_USDT',base:'BTC',quote:'USDT',trade_status:'tradable'},
+    ],
+  });
+  const btc = markets.find((x)=>x.symbol==='BTCUSDT');
+  assert.deepEqual(btc.feePctByExchange,{});
+});
+
+test('custos padrão multiexchange continuam aplicados quando catálogo não informa fee específica', () => {
+  const r = evaluateAcrossExchanges({
+    symbol:'BTCUSDT',
+    identityConfirmed:true,
+    booksByExchange:{
+      bybit:book(99.9,100),
+      okx:book(100.5,100.6),
+    },
+    budgetUsdt:100,
+    costs:{
+      exchangeFeePct:{bybit:0.10,okx:0.40},
+      reservePct:0.05,
+      recompositionUsdt:0.50,
+    },
+    rules,
+    now,
+  });
+  assert.ok(r.tradingFeesUsdt > 0.49);
+  assert.ok(r.executionNetPnlUsdt < 0);
+  assert.equal(r.eligible,false);
+});
