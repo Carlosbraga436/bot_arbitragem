@@ -357,7 +357,7 @@ test('custos padrão multiexchange continuam aplicados quando catálogo não inf
     identityConfirmed:true,
     booksByExchange:{
       bybit:book(99.9,100),
-      okx:book(100.5,100.6),
+      okx:book(100.1,100.2),
     },
     budgetUsdt:100,
     costs:{
