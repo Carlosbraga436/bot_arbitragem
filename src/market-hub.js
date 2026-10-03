@@ -3,9 +3,10 @@ import { finitePositive } from './core.js';
 export const BYBIT_MAX_ARGS_PER_SUBSCRIBE = 10;
 export const MAX_MONITORED_SYMBOLS = 800;
 export const BINANCE_SUBSCRIBE_CHUNK = 180;
+export const BYBIT_POLL_MS = 1_000;
 
 const BINANCE_WS = 'wss://stream.binance.com:443/ws';
-const BYBIT_WS = 'wss://stream.bybit.com/v5/public/spot';
+const BYBIT_REST_BASES = ['https://api.bybit.com','https://api.bytick.com'];
 
 export function chunkTopics(items, size = BYBIT_MAX_ARGS_PER_SUBSCRIBE) {
   const n = Math.max(1, Number(size) || BYBIT_MAX_ARGS_PER_SUBSCRIBE);
@@ -35,7 +36,6 @@ export function buildCommonUsdtMarkets({
   const bybitActive = (bybitSymbols || [])
     .filter((x) => x?.status === 'Trading' && x?.quoteCoin === 'USDT' && x?.symbol && x?.baseCoin);
 
-  // When a Binance catalog is available (e.g. tests/local diagnostics), intersect it.
   if (Array.isArray(binanceSymbols)) {
     const bSymbols = new Map(
       binanceSymbols
@@ -61,9 +61,6 @@ export function buildCommonUsdtMarkets({
       .sort((a, b) => a.symbol.localeCompare(b.symbol));
   }
 
-  // Hosted mode: Binance REST may be rate-limited. Probe the exact same symbol
-  // through Binance bookTicker; a pair only becomes comparable after both
-  // exchanges have delivered live top-of-book data for that exact symbol.
   return bybitActive
     .map((y) => ({
       base: y.baseCoin,
@@ -93,8 +90,24 @@ function topBook({ bidPrice, bidQty, askPrice, askQty, ts }) {
   return { bids: [[b, B]], asks: [[a, A]], ts: t };
 }
 
+async function fetchJson(url, timeoutMs = 5_000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'user-agent': 'radar-cripto-carlos/0.17-recovery' },
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return await r.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export function createMarketHub({ symbols = [], logger = console } = {}) {
   const monitored = [...new Set(symbols)].slice(0, MAX_MONITORED_SYMBOLS);
+  const monitoredSet = new Set(monitored);
   const books = { binance: new Map(), bybit: new Map() };
   const status = {
     binance: { state: 'idle', last: null, error: null },
@@ -104,16 +117,16 @@ export function createMarketHub({ symbols = [], logger = console } = {}) {
     binanceFirstQuoteAt: null,
     bybitFirstQuoteAt: null,
     binanceSubscribedBatches: 0,
-    bybitSubscribedBatches: 0,
-    bybitRejectedTopics: [],
+    bybitPollsOk: 0,
+    bybitPollsFailed: 0,
+    bybitLastPollCount: 0,
+    bybitRestSource: null,
   };
-  const sockets = { binance: null, bybit: null };
-  const reconnectTimers = { binance: null, bybit: null };
+  const sockets = { binance: null };
+  const reconnectTimers = { binance: null };
   const timers = new Set();
-  const bybitSubscriptionBatches = new Map();
   let stopped = false;
-  let bybitHeartbeat = null;
-  let bybitRetrySeq = 0;
+  let bybitGeneration = 0;
 
   function later(fn, delay) {
     const timer = setTimeout(() => {
@@ -121,6 +134,7 @@ export function createMarketHub({ symbols = [], logger = console } = {}) {
       fn();
     }, delay);
     timers.add(timer);
+    return timer;
   }
 
   function setStatus(exchange, state, error = null) {
@@ -179,7 +193,8 @@ export function createMarketHub({ symbols = [], logger = console } = {}) {
           return;
         }
         const symbol = msg?.s;
-        if (!symbol || !monitored.includes(symbol)) return;
+        if (!symbol || !monitoredSet.has(symbol)) return;
+
         const ts = Date.now();
         const book = topBook({
           bidPrice: msg.b,
@@ -189,6 +204,7 @@ export function createMarketHub({ symbols = [], logger = console } = {}) {
           ts,
         });
         if (!book) return;
+
         books.binance.set(symbol, book);
         if (!diagnostics.binanceFirstQuoteAt) {
           diagnostics.binanceFirstQuoteAt = ts;
@@ -201,108 +217,77 @@ export function createMarketHub({ symbols = [], logger = console } = {}) {
     };
   }
 
-  function sendBybitSubscribe(ws, args, reqId) {
-    bybitSubscriptionBatches.set(reqId, args);
-    ws.send(JSON.stringify({ req_id: reqId, op: 'subscribe', args }));
+  async function fetchBybitSnapshot() {
+    const errors = [];
+    for (const base of BYBIT_REST_BASES) {
+      try {
+        const data = await fetchJson(`${base}/v5/market/tickers?category=spot`);
+        if (data?.retCode !== 0 || !Array.isArray(data?.result?.list)) {
+          throw new Error(data?.retMsg || 'invalid_response');
+        }
+        return { base, list: data.result.list };
+      } catch (error) {
+        errors.push(`${base}: ${error?.message || error}`);
+      }
+    }
+    throw new Error(errors.join(' | '));
   }
 
   function connectBybit() {
     if (stopped || !monitored.length) return;
-    try { sockets.bybit?.close(); } catch {}
-    if (bybitHeartbeat) clearInterval(bybitHeartbeat);
-    bybitSubscriptionBatches.clear();
-    diagnostics.bybitRejectedTopics = [];
-    diagnostics.bybitSubscribedBatches = 0;
-    bybitRetrySeq = 0;
+    const generation = ++bybitGeneration;
     setStatus('bybit', 'connecting');
 
-    const ws = new WebSocket(BYBIT_WS);
-    sockets.bybit = ws;
+    const poll = async () => {
+      if (stopped || generation !== bybitGeneration) return;
 
-    ws.onopen = () => {
-      logger.info('[market] Bybit WS conectado; assinando tickers');
-      setStatus('bybit', 'connecting');
-      const topics = monitored.map((s) => `tickers.${s}`);
-      chunkTopics(topics).forEach((args, index) => {
-        later(() => {
-          if (ws.readyState !== WebSocket.OPEN) return;
-          sendBybitSubscribe(ws, args, `tk-${index + 1}`);
-        }, index * 100);
-      });
-      bybitHeartbeat = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ op: 'ping' }));
-      }, 20_000);
-    };
-
-    ws.onerror = () => setStatus('bybit', 'error', 'websocket_error');
-
-    ws.onclose = (event) => {
-      if (bybitHeartbeat) clearInterval(bybitHeartbeat);
-      bybitHeartbeat = null;
-      setStatus('bybit', 'disconnected', `close_${event?.code ?? 'unknown'}`);
-      logger.warn('[market] Bybit WS desconectado', event?.code);
-      scheduleReconnect('bybit', connectBybit);
-    };
-
-    ws.onmessage = (event) => {
       try {
-        const msg = parseMessage(event);
-
-        if (msg?.op === 'subscribe') {
-          const reqId = msg.req_id || '';
-          const batch = bybitSubscriptionBatches.get(reqId) || [];
-          bybitSubscriptionBatches.delete(reqId);
-
-          if (msg.success === false) {
-            logger.warn('[market] Bybit subscribe falhou', reqId, msg.ret_msg || '');
-            if (batch.length > 1) {
-              for (const topic of batch) {
-                bybitRetrySeq += 1;
-                later(() => {
-                  if (ws.readyState === WebSocket.OPEN) {
-                    sendBybitSubscribe(ws, [topic], `retry-${bybitRetrySeq}`);
-                  }
-                }, bybitRetrySeq * 100);
-              }
-            } else if (batch.length === 1) {
-              if (!diagnostics.bybitRejectedTopics.includes(batch[0])) {
-                diagnostics.bybitRejectedTopics.push(batch[0]);
-              }
-              logger.warn('[market] Bybit tópico rejeitado', batch[0]);
-            }
-          } else {
-            diagnostics.bybitSubscribedBatches += 1;
-          }
-          return;
-        }
-
-        if (msg?.op === 'ping' || msg?.ret_msg === 'pong') return;
-        if (!msg?.topic?.startsWith('tickers.')) return;
-
-        const raw = Array.isArray(msg.data) ? msg.data[0] : msg.data;
-        const symbol = raw?.symbol || msg.topic.slice('tickers.'.length);
-        if (!symbol || !monitored.includes(symbol)) return;
-
+        const result = await fetchBybitSnapshot();
         const ts = Date.now();
-        const book = topBook({
-          bidPrice: raw?.bid1Price,
-          bidQty: raw?.bid1Size,
-          askPrice: raw?.ask1Price,
-          askQty: raw?.ask1Size,
-          ts,
-        });
-        if (!book) return;
+        let count = 0;
 
-        books.bybit.set(symbol, book);
-        if (!diagnostics.bybitFirstQuoteAt) {
-          diagnostics.bybitFirstQuoteAt = ts;
-          logger.info('[market] Bybit primeira cotação', symbol);
+        for (const raw of result.list) {
+          const symbol = raw?.symbol;
+          if (!symbol || !monitoredSet.has(symbol)) continue;
+
+          const book = topBook({
+            bidPrice: raw?.bid1Price,
+            bidQty: raw?.bid1Size,
+            askPrice: raw?.ask1Price,
+            askQty: raw?.ask1Size,
+            ts,
+          });
+          if (!book) continue;
+
+          books.bybit.set(symbol, book);
+          count += 1;
         }
-        touch('bybit', ts);
+
+        diagnostics.bybitPollsOk += 1;
+        diagnostics.bybitLastPollCount = count;
+        diagnostics.bybitRestSource = result.base;
+
+        if (count > 0) {
+          if (!diagnostics.bybitFirstQuoteAt) {
+            diagnostics.bybitFirstQuoteAt = ts;
+            logger.info('[market] Bybit primeiro snapshot agregado', count, 'pares');
+          }
+          touch('bybit', ts);
+        } else {
+          setStatus('bybit', 'error', 'empty_ticker_snapshot');
+        }
       } catch (error) {
-        logger.warn('[market] Bybit mensagem inválida', error?.message || error);
+        diagnostics.bybitPollsFailed += 1;
+        setStatus('bybit', 'error', error?.message || 'rest_poll_failed');
+        logger.warn('[market] Bybit snapshot falhou', error?.message || error);
+      } finally {
+        if (!stopped && generation === bybitGeneration) {
+          later(poll, BYBIT_POLL_MS);
+        }
       }
     };
+
+    poll();
   }
 
   function start() {
@@ -313,23 +298,20 @@ export function createMarketHub({ symbols = [], logger = console } = {}) {
 
   function stop() {
     stopped = true;
+    bybitGeneration += 1;
     for (const timer of timers) clearTimeout(timer);
     timers.clear();
-    for (const key of Object.keys(reconnectTimers)) {
-      if (reconnectTimers[key]) clearTimeout(reconnectTimers[key]);
-      reconnectTimers[key] = null;
-    }
-    if (bybitHeartbeat) clearInterval(bybitHeartbeat);
-    bybitHeartbeat = null;
-    for (const ws of Object.values(sockets)) {
-      try { ws?.close(); } catch {}
-    }
+    if (reconnectTimers.binance) clearTimeout(reconnectTimers.binance);
+    reconnectTimers.binance = null;
+    try { sockets.binance?.close(); } catch {}
   }
 
   function reconnect() {
-    for (const ws of Object.values(sockets)) {
-      try { ws?.close(); } catch {}
-    }
+    bybitGeneration += 1;
+    for (const timer of timers) clearTimeout(timer);
+    timers.clear();
+    try { sockets.binance?.close(); } catch {}
+
     later(() => {
       if (!stopped) {
         connectBinance();
