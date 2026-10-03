@@ -17,6 +17,7 @@ export const DEFAULT_RULES = Object.freeze({
   maxAgeMs: 5_000,
   maxSkewMs: 2_000,
   minBudgetFillPct: 100,
+  maxUnverifiedGrossSpreadPct: 10,
 });
 
 export function finitePositive(value) {
@@ -174,6 +175,27 @@ export function evaluateRoute({
   const sellFeeRate = pctToRate(exchangeFeePct(sellExchange, costs));
   const reserveRate = pctToRate(costs.reservePct);
   const grossPnl = sold.quoteReceived - bought.quoteSpent;
+  const grossSpreadPct = (grossPnl / bought.quoteSpent) * 100;
+  const maxUnverifiedGrossSpreadPct = finitePositive(rules.maxUnverifiedGrossSpreadPct);
+  if (maxUnverifiedGrossSpreadPct && grossSpreadPct > maxUnverifiedGrossSpreadPct) {
+    return {
+      eligible: false,
+      reason: 'price_anomaly_unverified',
+      symbol,
+      buyExchange,
+      sellExchange,
+      budgetUsdt: budget,
+      baseQty: bought.baseQty,
+      buyVwap: bought.vwap,
+      sellVwap: sold.vwap,
+      grossPnlUsdt: grossPnl,
+      grossSpreadPct,
+      buyAgeMs,
+      sellAgeMs,
+      skewMs,
+    };
+  }
+
   const tradingFees = bought.quoteSpent * buyFeeRate + sold.quoteReceived * sellFeeRate;
   const reserve = (bought.quoteSpent + sold.quoteReceived) * reserveRate;
   const recomposition = Math.max(0, Number(costs.recompositionUsdt) || 0);
@@ -191,6 +213,7 @@ export function evaluateRoute({
     buyVwap: bought.vwap,
     sellVwap: sold.vwap,
     grossPnlUsdt: grossPnl,
+    grossSpreadPct,
     tradingFeesUsdt: tradingFees,
     reserveUsdt: reserve,
     recompositionUsdt: recomposition,
