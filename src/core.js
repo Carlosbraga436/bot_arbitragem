@@ -17,7 +17,7 @@ export const DEFAULT_RULES = Object.freeze({
   maxAgeMs: 5_000,
   maxSkewMs: 2_000,
   minBudgetFillPct: 100,
-  maxUnverifiedGrossSpreadPct: 10,
+  maxUnverifiedGrossSpreadPct: 5,
   maxVenueDeviationPct: 3,
 });
 
