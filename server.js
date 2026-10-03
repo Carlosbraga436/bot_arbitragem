@@ -17,8 +17,9 @@ const PORT = Number(process.env.PORT || 8787);
 const BYBIT_BASES = ['https://api.bybit.com','https://api.bytick.com'];
 const OKX_BASES = ['https://www.okx.com','https://openapi.okx.com'];
 const GATE_BASES = ['https://api.gateio.ws/api/v4'];
+const KUCOIN_BASES = ['https://api.kucoin.com'];
 const REQUEST_TIMEOUT_MS = 10_000;
-const APP_VERSION = '0.18.0-recovery.1';
+const APP_VERSION = '0.19.0-recovery.1';
 
 let runtimePromise = null;
 
@@ -95,23 +96,37 @@ async function fetchGateSpotPairs() {
   return {base:result.base,items:result.data};
 }
 
+async function fetchKucoinSpotInstruments() {
+  const result=await fetchFirst(
+    KUCOIN_BASES,
+    '/api/ua/v2/market/instrument?tradeType=SPOT',
+    (data)=>data?.code==='200000' && Array.isArray(data?.data?.list),
+  );
+  return {base:result.base,items:result.data.data.list};
+}
+
 async function getCatalog() {
-  const [bybitResult,okxResult,gateResult]=await Promise.all([
+  const [bybitResult,okxResult,gateResult,kucoinResult]=await Promise.all([
     fetchBybitSpotInstruments(),
     fetchOkxSpotInstruments(),
     fetchGateSpotPairs(),
+    fetchKucoinSpotInstruments(),
   ]);
 
   const candidates=buildMultiExchangeUniverse({
     bybitSymbols:bybitResult.items,
     okxSymbols:okxResult.items,
     gateSymbols:gateResult.items,
+    kucoinSymbols:kucoinResult.items,
   });
   const monitoredSymbols=selectConfirmedSymbols(candidates,MAX_MONITORED_SYMBOLS);
   const monitoredSet=new Set(monitoredSymbols);
 
   const gateSymbols=candidates
     .filter((x)=>monitoredSet.has(x.symbol) && x?.venues?.gate)
+    .map((x)=>x.symbol);
+  const kucoinSymbols=candidates
+    .filter((x)=>monitoredSet.has(x.symbol) && x?.venues?.kucoin)
     .map((x)=>x.symbol);
 
   const countVenue=(venue)=>candidates.filter((x)=>x?.venues?.[venue]).length;
@@ -124,6 +139,7 @@ async function getCatalog() {
       bybit:bybitResult.base,
       okx:okxResult.base,
       gate:gateResult.base,
+      kucoin:kucoinResult.base,
     },
     universeMode:'union_of_public_USDT_catalogs+live_books',
     maxMonitored:MAX_MONITORED_SYMBOLS,
@@ -132,11 +148,13 @@ async function getCatalog() {
       bybitActiveUsdt:countVenue('bybit'),
       okxActiveUsdt:countVenue('okx'),
       gateActiveUsdt:countVenue('gate'),
+      kucoinActiveUsdt:countVenue('kucoin'),
       candidateUsdt:candidates.length,
     },
     candidates,
     monitoredSymbols,
     gateSymbols,
+    kucoinSymbols,
     confirmed:candidates.length,
     pending:0,
   };
@@ -153,11 +171,12 @@ async function ensureRuntime() {
       const marketHub=createMarketHub({
         symbols:catalog.monitoredSymbols,
         gateSymbols:catalog.gateSymbols,
+        kucoinSymbols:catalog.kucoinSymbols,
       });
       marketHub.start();
 
       console.log(
-        `[catalog] ${catalog.exchangeUniverse.candidateUsdt} candidatos USDT; monitorando ${catalog.monitoredSymbols.length}; Gate ${catalog.gateSymbols.length}`
+        `[catalog] ${catalog.exchangeUniverse.candidateUsdt} candidatos USDT; monitorando ${catalog.monitoredSymbols.length}; Gate ${catalog.gateSymbols.length}; KuCoin ${catalog.kucoinSymbols.length}`
       );
 
       const runtime={catalog,marketHub};
@@ -193,12 +212,19 @@ function marketDiagnostics(runtime,budgetUsdt=100) {
         .map((exchange)=>[exchange,snap.books[exchange]?.[symbol]])
         .filter(([,book])=>book)
     );
+    const costs={
+      ...DEFAULT_COSTS,
+      exchangeFeePct:{
+        ...DEFAULT_COSTS.exchangeFeePct,
+        ...(asset?.feePctByExchange || {}),
+      },
+    };
     return evaluateAcrossExchanges({
       symbol,
       identityConfirmed:Boolean(asset?.identityConfirmed),
       booksByExchange,
       budgetUsdt,
-      costs:DEFAULT_COSTS,
+      costs,
       rules:DEFAULT_RULES,
       now,
     });
@@ -276,7 +302,7 @@ const server=http.createServer(async(req,res)=>{
         mode:'simulation-only',
         ordersEnabled:false,
         version:APP_VERSION,
-        exchanges:['binance','bybit','okx','gate'],
+        exchanges:['binance','bybit','okx','gate','kucoin'],
       });
     }
 
@@ -309,7 +335,7 @@ const server=http.createServer(async(req,res)=>{
         version:APP_VERSION,
         universeMode:catalog.universeMode,
         sources:catalog.sources,
-        exchanges:['binance','bybit','okx','gate'],
+        exchanges:['binance','bybit','okx','gate','kucoin'],
         feeModel:DEFAULT_COSTS,
         monitoredCount:catalog.monitoredSymbols.length,
         candidateUsdt:catalog.exchangeUniverse.candidateUsdt,
