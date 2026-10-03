@@ -266,3 +266,54 @@ test('consenso não bloqueia rota normal entre venues alinhadas', () => {
   assert.equal(r.buyExchange,'binance');
   assert.equal(r.sellExchange,'bybit');
 });
+
+
+test('universo multiexchange inclui KuCoin e deriva taxa VIP0 por classe do par', () => {
+  const markets = buildMultiExchangeUniverse({
+    kucoinSymbols:[
+      {
+        symbol:'BTC-USDT',
+        baseCurrency:'BTC',
+        quoteCurrency:'USDT',
+        tradingStatus:'TradingEnabled',
+        feeCategory:'classA',
+        takerFeeCoefficient:'1.00',
+      },
+      {
+        symbol:'ABC-USDT',
+        baseCurrency:'ABC',
+        quoteCurrency:'USDT',
+        tradingStatus:'TradingEnabled',
+        feeCategory:'classC',
+        takerFeeCoefficient:'1.00',
+      },
+    ],
+  });
+  const btc = markets.find((x)=>x.symbol==='BTCUSDT');
+  const abc = markets.find((x)=>x.symbol==='ABCUSDT');
+  assert.equal(btc.venues.kucoin,true);
+  assert.equal(btc.feePctByExchange.kucoin,0.10);
+  assert.equal(abc.feePctByExchange.kucoin,0.30);
+});
+
+test('rota KuCoin usa taxa específica do par quando fornecida', () => {
+  const r = evaluateAcrossExchanges({
+    symbol:'ABCUSDT',
+    identityConfirmed:true,
+    booksByExchange:{
+      kucoin:book(99.9,100),
+      gate:book(101.0,101.1),
+    },
+    budgetUsdt:100,
+    costs:{
+      exchangeFeePct:{kucoin:0.30,gate:0.10},
+      reservePct:0.05,
+      recompositionUsdt:0.5,
+    },
+    rules,
+    now,
+  });
+  assert.equal(r.buyExchange,'kucoin');
+  assert.equal(r.sellExchange,'gate');
+  assert.ok(r.tradingFeesUsdt > 0.39);
+});
