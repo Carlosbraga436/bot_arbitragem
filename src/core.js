@@ -18,6 +18,7 @@ export const DEFAULT_RULES = Object.freeze({
   maxSkewMs: 2_000,
   minBudgetFillPct: 100,
   maxUnverifiedGrossSpreadPct: 10,
+  maxVenueDeviationPct: 3,
 });
 
 export function finitePositive(value) {
@@ -235,8 +236,46 @@ export function evaluateAcrossExchanges({
   rules = DEFAULT_RULES,
   now = Date.now(),
 }) {
-  const entries = Object.entries(booksByExchange).filter(([, book]) => book);
+  let entries = Object.entries(booksByExchange).filter(([, book]) => book);
   if (entries.length < 2) return { eligible:false, reason:'invalid_data', symbol };
+
+  const normalized = entries
+    .map(([exchange, book]) => [exchange, normalizeBook(book)])
+    .filter(([, book]) => book);
+
+  if (normalized.length < 2) return { eligible:false, reason:'invalid_data', symbol };
+
+  if (normalized.length >= 3) {
+    const mids = normalized
+      .map(([, book]) => (book.bids[0][0] + book.asks[0][0]) / 2)
+      .sort((a,b)=>a-b);
+    const midIndex = Math.floor(mids.length / 2);
+    const median = mids.length % 2
+      ? mids[midIndex]
+      : (mids[midIndex - 1] + mids[midIndex]) / 2;
+    const maxDeviationPct = finitePositive(rules.maxVenueDeviationPct);
+
+    if (maxDeviationPct) {
+      const accepted = new Set(
+        normalized
+          .filter(([, book]) => {
+            const mid = (book.bids[0][0] + book.asks[0][0]) / 2;
+            return Math.abs((mid / median - 1) * 100) <= maxDeviationPct;
+          })
+          .map(([exchange]) => exchange)
+      );
+      entries = entries.filter(([exchange]) => accepted.has(exchange));
+      if (entries.length < 2) {
+        return {
+          eligible:false,
+          reason:'price_consensus_failed',
+          symbol,
+          venueCount:normalized.length,
+          medianMid:median,
+        };
+      }
+    }
+  }
 
   const routes = [];
   for (const [buyExchange, buyBook] of entries) {
