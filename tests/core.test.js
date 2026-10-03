@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluatePair, evaluateRoute, topPositive } from '../src/core.js';
+import { applyOrderBookMessage, evaluatePair, evaluateRoute, topPositive } from '../src/core.js';
 
 const now = 1_800_000_000_000;
 const book = (bid, ask, qty=1000, ts=now) => ({ bids:[[String(bid),String(qty)]], asks:[[String(ask),String(qty)]], ts });
@@ -41,4 +41,11 @@ test('topPositive mantém apenas positivas e limita top 5', () => {
   const list = Array.from({length:7},(_,i)=>({eligible:true,netPnlUsdt:i+1,symbol:`S${i}`}));
   const top = topPositive([...list,{eligible:false,netPnlUsdt:99,symbol:'BAD'}],5);
   assert.deepEqual(top.map(x=>x.netPnlUsdt),[7,6,5,4,3]);
+});
+
+test('Bybit depth 50 aplica snapshot e delta sem tratar delta como livro completo', () => {
+  const snap = applyOrderBookMessage(null, { bids:[["100","2"],["99","3"]], asks:[["101","2"],["102","4"]], ts:now }, 'snapshot', 50);
+  const next = applyOrderBookMessage(snap, { bids:[["100","0"],["98","5"]], asks:[["101","7"]], ts:now+10 }, 'delta', 50);
+  assert.deepEqual(next.bids, [[99,3],[98,5]]);
+  assert.deepEqual(next.asks, [[101,7],[102,4]]);
 });
