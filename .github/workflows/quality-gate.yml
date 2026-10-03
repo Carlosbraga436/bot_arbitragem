@@ -24,7 +24,7 @@ jobs:
         id: detect
         shell: bash
         run: |
-          if [ -f pyproject.toml ] || [ -f requirements.txt ] || [ -d tests ]; then
+          if [ -f pyproject.toml ] || [ -f requirements.txt ] || find . -maxdepth 3 -type f -name 'test_*.py' | grep -q .; then
             echo "python=true" >> "$GITHUB_OUTPUT"
           fi
           if [ -f package.json ]; then
@@ -48,13 +48,7 @@ jobs:
 
       - name: Run Python tests
         if: steps.detect.outputs.python == 'true'
-        shell: bash
-        run: |
-          if [ -d tests ] || find . -maxdepth 2 -name 'test_*.py' | grep -q .; then
-            pytest -q
-          else
-            echo "No Python tests yet; quality gate remains partial."
-          fi
+        run: pytest -q
 
       - name: Set up Node
         if: steps.detect.outputs.node == 'true'
