@@ -13,7 +13,7 @@ A branch `recovery/site-v16-baseline` contém a primeira baseline reconstruída 
 - Binance × Bybit.
 - Mercado spot em USDT.
 - 25 candidatos canônicos; até 15 pares comuns monitorados.
-- Livros de ofertas em tempo real.
+- Livros de ofertas em tempo real via relay server-side; o navegador consome o próprio backend e não conecta diretamente às exchanges.
 - Simulação de profundidade/VWAP para o valor escolhido.
 - Filtro de identidade, freshness, sincronismo e liquidez.
 - Custos modelados antes de classificar oportunidade.
@@ -32,6 +32,8 @@ npm start
 ```
 
 Abra `http://127.0.0.1:8787`.
+
+Preview de recuperação: `https://radar-cripto-carlos-frankfurt.onrender.com` (Frankfurt).
 
 ## Regras
 
