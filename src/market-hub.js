@@ -29,37 +29,53 @@ export function selectConfirmedSymbols(candidates, preferredOrLimit = MAX_MONITO
 }
 
 export function buildCommonUsdtMarkets({
-  binanceSymbols = [],
+  binanceSymbols = null,
   bybitSymbols = [],
 } = {}) {
-  const bSymbols = new Map(
-    binanceSymbols
-      .filter((x) => x?.status === 'TRADING' && x?.quoteAsset === 'USDT' && x?.symbol && x?.baseAsset)
-      .map((x) => [x.symbol, x]),
-  );
-  const ySymbols = new Map(
-    bybitSymbols
-      .filter((x) => x?.status === 'Trading' && x?.quoteCoin === 'USDT' && x?.symbol && x?.baseCoin)
-      .map((x) => [x.symbol, x]),
-  );
-  const candidates = [];
-  for (const [symbol, b] of bSymbols) {
-    const y = ySymbols.get(symbol);
-    if (!y || y.baseCoin !== b.baseAsset || y.quoteCoin !== b.quoteAsset) continue;
+  const bybitActive = (bybitSymbols || [])
+    .filter((x) => x?.status === 'Trading' && x?.quoteCoin === 'USDT' && x?.symbol && x?.baseCoin);
 
-    candidates.push({
-      base: b.baseAsset,
-      name: b.baseAsset,
-      symbol,
-      quote: 'USDT',
-      binanceActive: true,
-      bybitActive: true,
-      identityConfirmed: true,
-      identityMethod: 'exact_symbol+base+quote+exchange_catalogs',
-    });
+  // When a Binance catalog is available (e.g. tests/local diagnostics), intersect it.
+  if (Array.isArray(binanceSymbols)) {
+    const bSymbols = new Map(
+      binanceSymbols
+        .filter((x) => x?.status === 'TRADING' && x?.quoteAsset === 'USDT' && x?.symbol && x?.baseAsset)
+        .map((x) => [x.symbol, x]),
+    );
+
+    return bybitActive
+      .filter((y) => {
+        const b = bSymbols.get(y.symbol);
+        return b && b.baseAsset === y.baseCoin && b.quoteAsset === y.quoteCoin;
+      })
+      .map((y) => ({
+        base: y.baseCoin,
+        name: y.baseCoin,
+        symbol: y.symbol,
+        quote: 'USDT',
+        binanceActive: true,
+        bybitActive: true,
+        identityConfirmed: true,
+        identityMethod: 'exact_symbol+base+quote+exchange_catalogs',
+      }))
+      .sort((a, b) => a.symbol.localeCompare(b.symbol));
   }
 
-  return candidates.sort((a, b) => a.symbol.localeCompare(b.symbol));
+  // Hosted mode: Binance REST may be rate-limited. Probe the exact same symbol
+  // through Binance bookTicker; a pair only becomes comparable after both
+  // exchanges have delivered live top-of-book data for that exact symbol.
+  return bybitActive
+    .map((y) => ({
+      base: y.baseCoin,
+      name: y.baseCoin,
+      symbol: y.symbol,
+      quote: 'USDT',
+      binanceActive: null,
+      bybitActive: true,
+      identityConfirmed: true,
+      identityMethod: 'bybit_catalog+exact_symbol_live_probe_on_binance',
+    }))
+    .sort((a, b) => a.symbol.localeCompare(b.symbol));
 }
 
 function parseMessage(event) {
