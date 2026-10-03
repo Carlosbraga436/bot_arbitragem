@@ -23,11 +23,7 @@ export function selectConfirmedSymbols(candidates, preferredOrLimit = MAX_MONITO
 
   return (candidates || [])
     .filter((x) => x?.identityConfirmed && typeof x.symbol === 'string')
-    .sort((a, b) => {
-      const al = Number(a.commonTurnover24hUsdt) || 0;
-      const bl = Number(b.commonTurnover24hUsdt) || 0;
-      return bl - al || a.symbol.localeCompare(b.symbol);
-    })
+    .sort((a, b) => a.symbol.localeCompare(b.symbol))
     .slice(0, Math.max(1, Math.min(limit, MAX_MONITORED_SYMBOLS)))
     .map((x) => x.symbol);
 }
@@ -35,8 +31,6 @@ export function selectConfirmedSymbols(candidates, preferredOrLimit = MAX_MONITO
 export function buildCommonUsdtMarkets({
   binanceSymbols = [],
   bybitSymbols = [],
-  binanceTickers = [],
-  bybitTickers = [],
 } = {}) {
   const bSymbols = new Map(
     binanceSymbols
@@ -48,19 +42,10 @@ export function buildCommonUsdtMarkets({
       .filter((x) => x?.status === 'Trading' && x?.quoteCoin === 'USDT' && x?.symbol && x?.baseCoin)
       .map((x) => [x.symbol, x]),
   );
-  const bTicker = new Map((binanceTickers || []).map((x) => [x.symbol, x]));
-  const yTicker = new Map((bybitTickers || []).map((x) => [x.symbol, x]));
-
   const candidates = [];
   for (const [symbol, b] of bSymbols) {
     const y = ySymbols.get(symbol);
     if (!y || y.baseCoin !== b.baseAsset || y.quoteCoin !== b.quoteAsset) continue;
-
-    const bt = bTicker.get(symbol);
-    const yt = yTicker.get(symbol);
-    const binanceTurnover24hUsdt = finitePositive(bt?.quoteVolume) || 0;
-    const bybitTurnover24hUsdt = finitePositive(yt?.turnover24h) || 0;
-    const commonTurnover24hUsdt = Math.min(binanceTurnover24hUsdt, bybitTurnover24hUsdt);
 
     candidates.push({
       base: b.baseAsset,
@@ -71,15 +56,10 @@ export function buildCommonUsdtMarkets({
       bybitActive: true,
       identityConfirmed: true,
       identityMethod: 'exact_symbol+base+quote+exchange_catalogs',
-      binanceTurnover24hUsdt,
-      bybitTurnover24hUsdt,
-      commonTurnover24hUsdt,
     });
   }
 
-  return candidates.sort((a, b) =>
-    b.commonTurnover24hUsdt - a.commonTurnover24hUsdt || a.symbol.localeCompare(b.symbol)
-  );
+  return candidates.sort((a, b) => a.symbol.localeCompare(b.symbol));
 }
 
 function parseMessage(event) {
