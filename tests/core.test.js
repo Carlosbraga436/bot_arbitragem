@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyOrderBookMessage, evaluateAcrossExchanges, evaluatePair, evaluateRoute, topPositive } from '../src/core.js';
-import { BINANCE_STREAMS_PER_SOCKET, buildCommonUsdtMarkets, buildMultiExchangeUniverse, chunkTopics, createMarketHub, MAX_MONITORED_SYMBOLS, selectConfirmedSymbols } from '../src/market-hub.js';
+import { BINANCE_DISCOVERY_STREAM, buildCommonUsdtMarkets, buildMultiExchangeUniverse, chunkTopics, createMarketHub, MAX_MONITORED_SYMBOLS, selectConfirmedSymbols, selectDiscoveredBinanceSymbols } from '../src/market-hub.js';
 
 const now = 1_800_000_000_000;
 const book = (bid, ask, qty=1000, ts=now) => ({ bids:[[String(bid),String(qty)]], asks:[[String(ask),String(qty)]], ts });
@@ -111,14 +111,15 @@ test('catálogo dinâmico mantém somente par USDT ativo e idêntico nas duas ex
   assert.equal(markets[0].identityConfirmed, true);
 });
 
-test('teto amplo cobre mais de dois mil pares com múltiplas conexões Binance', () => {
+test('teto amplo cobre mais de dois mil candidatos sem assinar símbolos inválidos na Binance', () => {
   assert.ok(MAX_MONITORED_SYMBOLS >= 2000);
-  assert.ok(BINANCE_STREAMS_PER_SOCKET <= 900);
-  const groups = chunkTopics(
-    Array.from({length:2290},(_,i)=>`s${i}@bookTicker`),
-    BINANCE_STREAMS_PER_SOCKET,
+  assert.equal(BINANCE_DISCOVERY_STREAM,'!miniTicker@arr');
+  const monitored=['BTCUSDT','ETHUSDT','ONLYOTHERUSDT'];
+  const discovered=selectDiscoveredBinanceSymbols(
+    [{s:'BTCUSDT'},{s:'ETHUSDT'},{s:'BNBBTC'},{s:'NOTMONITOREDUSDT'}],
+    monitored,
   );
-  assert.deepEqual(groups.map((x)=>x.length), [700,700,700,190]);
+  assert.deepEqual(discovered,['BTCUSDT','ETHUSDT']);
 });
 
 
