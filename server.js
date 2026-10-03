@@ -82,23 +82,14 @@ async function fetchBybitSpotInstruments() {
 }
 
 async function getCatalog() {
-  const [binanceInfoResult, bybitInfoResult] = await Promise.all([
-    fetchFirst(BINANCE_BASES, '/api/v3/exchangeInfo'),
-    fetchBybitSpotInstruments(),
-  ]);
-
-  const binanceSymbols = binanceInfoResult.data?.symbols || [];
+  const bybitInfoResult = await fetchBybitSpotInstruments();
   const bybitSymbols = bybitInfoResult.items || [];
 
   const candidates = buildCommonUsdtMarkets({
-    binanceSymbols,
     bybitSymbols,
   });
   const monitoredSymbols = selectConfirmedSymbols(candidates, MAX_MONITORED_SYMBOLS);
 
-  const binanceActiveUsdt = binanceSymbols.filter(
-    (x) => x?.status === 'TRADING' && x?.quoteAsset === 'USDT'
-  ).length;
   const bybitActiveUsdt = bybitSymbols.filter(
     (x) => x?.status === 'Trading' && x?.quoteCoin === 'USDT'
   ).length;
@@ -107,15 +98,15 @@ async function getCatalog() {
     generatedAt: Date.now(),
     version: APP_VERSION,
     sources: {
-      binance: binanceInfoResult.base,
+      binance: 'live_websocket_probe',
       bybit: bybitInfoResult.base,
     },
-    universeMode: 'dynamic_common_spot_usdt',
+    universeMode: 'bybit_active_usdt+binance_live_probe',
     maxMonitored: MAX_MONITORED_SYMBOLS,
     exchangeUniverse: {
-      binanceActiveUsdt,
+      binanceActiveUsdt: null,
       bybitActiveUsdt,
-      commonActiveUsdt: candidates.length,
+      candidateUsdt: candidates.length,
     },
     candidates,
     monitoredSymbols,
@@ -136,7 +127,7 @@ async function ensureRuntime() {
       marketHub.start();
 
       console.log(
-        `[catalog] ${catalog.exchangeUniverse.commonActiveUsdt} pares comuns USDT; monitorando ${catalog.monitoredSymbols.length}/${catalog.maxMonitored}`
+        `[catalog] ${catalog.exchangeUniverse.candidateUsdt} candidatos USDT Bybit; sondando ${catalog.monitoredSymbols.length} na Binance por WebSocket`
       );
 
       return { catalog, marketHub };
@@ -211,7 +202,7 @@ const server = http.createServer(async (req, res) => {
         binanceWs: 'wss://stream.binance.com:443/ws',
         bybitWs: 'wss://stream.bybit.com/v5/public/spot',
         monitoredCount: catalog.monitoredSymbols.length,
-        commonActiveUsdt: catalog.exchangeUniverse.commonActiveUsdt,
+        candidateUsdt: catalog.exchangeUniverse.candidateUsdt,
       });
     }
 
