@@ -4,11 +4,13 @@ export const MAX_MONITORED_SYMBOLS = 800;
 export const BINANCE_SUBSCRIBE_CHUNK = 180;
 export const GATE_SUBSCRIBE_CHUNK = 80;
 export const AGGREGATE_POLL_MS = 1_000;
+export const KUCOIN_POLL_MS = 2_000;
 
 const BINANCE_WS = 'wss://stream.binance.com:443/ws';
 const GATE_WS = 'wss://api.gateio.ws/ws/v4/';
 const BYBIT_REST_BASES = ['https://api.bybit.com','https://api.bytick.com'];
 const OKX_REST_BASES = ['https://www.okx.com','https://openapi.okx.com'];
+const KUCOIN_REST_BASES = ['https://api.kucoin.com'];
 
 export function chunkTopics(items, size = 10) {
   const n = Math.max(1, Number(size) || 10);
@@ -26,10 +28,11 @@ export function buildMultiExchangeUniverse({
   bybitSymbols = [],
   okxSymbols = [],
   gateSymbols = [],
+  kucoinSymbols = [],
 } = {}) {
   const map = new Map();
 
-  const upsert = (base, venue) => {
+  const upsert = (base, venue, feePct = null) => {
     const symbol = canonicalSymbol(base);
     if (!symbol) return;
     const current = map.get(symbol) || {
@@ -37,12 +40,26 @@ export function buildMultiExchangeUniverse({
       name: String(base).toUpperCase(),
       symbol,
       quote: 'USDT',
-      venues: { binance:null, bybit:false, okx:false, gate:false },
+      venues: { binance:null, bybit:false, okx:false, gate:false, kucoin:false },
+      feePctByExchange: {},
       identityConfirmed: true,
       identityMethod: 'exact_base+USDT_exchange_catalog_or_live_probe',
     };
     current.venues[venue] = true;
+    if (Number.isFinite(Number(feePct)) && Number(feePct) >= 0) {
+      current.feePctByExchange[venue] = Number(feePct);
+    }
     map.set(symbol, current);
+  };
+
+  const kucoinFeePct = (x) => {
+    const raw = String(x?.feeCategory ?? '').toLowerCase();
+    const base = raw.includes('classa') || raw === '1' ? 0.10
+      : raw.includes('classb') || raw === '2' ? 0.20
+      : raw.includes('classc') || raw === '3' ? 0.30
+      : 0.30;
+    const coefficient = Number(x?.takerFeeCoefficient);
+    return base * (Number.isFinite(coefficient) && coefficient > 0 ? coefficient : 1);
   };
 
   for (const x of bybitSymbols) {
@@ -60,6 +77,13 @@ export function buildMultiExchangeUniverse({
   for (const x of gateSymbols) {
     if (x?.trade_status === 'tradable' && x?.quote === 'USDT' && x?.base) {
       upsert(x.base, 'gate');
+    }
+  }
+
+  for (const x of kucoinSymbols) {
+    const enabled = x?.tradingStatus === 'TradingEnabled' || x?.enableTrading === true;
+    if (enabled && x?.quoteCurrency === 'USDT' && x?.baseCurrency) {
+      upsert(x.baseCurrency, 'kucoin', kucoinFeePct(x));
     }
   }
 
@@ -170,39 +194,47 @@ async function fetchFirstJson(bases, path, validate) {
   throw new Error(errors.join(' | '));
 }
 
-export function createMarketHub({ symbols = [], gateSymbols = [], logger = console } = {}) {
+export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols = [], logger = console } = {}) {
   const monitored = [...new Set(symbols)].slice(0, MAX_MONITORED_SYMBOLS);
   const monitoredSet = new Set(monitored);
   const gateSet = new Set(gateSymbols.filter((x)=>monitoredSet.has(x)));
+  const kucoinSet = new Set(kucoinSymbols.filter((x)=>monitoredSet.has(x)));
 
   const books = {
     binance:new Map(),
     bybit:new Map(),
     okx:new Map(),
     gate:new Map(),
+    kucoin:new Map(),
   };
   const status = {
     binance:{state:'idle',last:null,error:null},
     bybit:{state:'idle',last:null,error:null},
     okx:{state:'idle',last:null,error:null},
     gate:{state:'idle',last:null,error:null},
+    kucoin:{state:'idle',last:null,error:null},
   };
   const diagnostics = {
     binanceFirstQuoteAt:null,
     bybitFirstQuoteAt:null,
     okxFirstQuoteAt:null,
     gateFirstQuoteAt:null,
+    kucoinFirstQuoteAt:null,
     binanceSubscribedBatches:0,
     gateSubscribedBatches:0,
     bybitPollsOk:0,
     bybitPollsFailed:0,
     okxPollsOk:0,
     okxPollsFailed:0,
+    kucoinPollsOk:0,
+    kucoinPollsFailed:0,
     bybitLastPollCount:0,
     okxLastPollCount:0,
+    kucoinLastPollCount:0,
     gateQuoteCount:0,
     bybitRestSource:null,
     okxRestSource:null,
+    kucoinRestSource:null,
   };
 
   const sockets = { binance:null, gate:null };
@@ -211,6 +243,7 @@ export function createMarketHub({ symbols = [], gateSymbols = [], logger = conso
   let stopped = false;
   let bybitGeneration = 0;
   let okxGeneration = 0;
+  let kucoinGeneration = 0;
 
   function later(fn, delay) {
     const timer = setTimeout(() => {
@@ -391,6 +424,62 @@ export function createMarketHub({ symbols = [], gateSymbols = [], logger = conso
     poll();
   }
 
+  async function fetchKucoinSnapshot() {
+    const result = await fetchFirstJson(
+      KUCOIN_REST_BASES,
+      '/api/v1/market/allTickers',
+      (data)=>data?.code === '200000' && Array.isArray(data?.data?.ticker),
+    );
+    return {
+      base:result.base,
+      list:result.data.data.ticker,
+      ts:Number(result.data?.data?.time) || Date.now(),
+    };
+  }
+
+  function connectKucoin() {
+    if (stopped || !kucoinSet.size) {
+      setStatus('kucoin','idle','no_symbols');
+      return;
+    }
+    const generation = ++kucoinGeneration;
+    setStatus('kucoin','connecting');
+
+    const poll = async () => {
+      if (stopped || generation !== kucoinGeneration) return;
+      try {
+        const result = await fetchKucoinSnapshot();
+        let count = 0;
+        for (const raw of result.list) {
+          const pair = String(raw?.symbol || '');
+          if (!pair.endsWith('-USDT')) continue;
+          const symbol = canonicalSymbol(pair.slice(0,-5));
+          if (!kucoinSet.has(symbol)) continue;
+          if (storeBook('kucoin',symbol,{
+            bidPrice:raw?.buy,bidQty:raw?.bestBidSize,
+            askPrice:raw?.sell,askQty:raw?.bestAskSize,
+            ts:result.ts,
+          })) count += 1;
+        }
+        diagnostics.kucoinPollsOk += 1;
+        diagnostics.kucoinLastPollCount = count;
+        diagnostics.kucoinRestSource = result.base;
+        if (count > 0 && !diagnostics.kucoinFirstQuoteAt) {
+          diagnostics.kucoinFirstQuoteAt = Date.now();
+          logger.info('[market] KuCoin primeiro snapshot agregado',count,'pares');
+        }
+        if (count === 0) setStatus('kucoin','error','empty_ticker_snapshot');
+      } catch (error) {
+        diagnostics.kucoinPollsFailed += 1;
+        setStatus('kucoin','error',error?.message || 'rest_poll_failed');
+        logger.warn('[market] KuCoin snapshot falhou',error?.message || error);
+      } finally {
+        if (!stopped && generation === kucoinGeneration) later(poll,KUCOIN_POLL_MS);
+      }
+    };
+    poll();
+  }
+
   function connectGate() {
     if (stopped || !gateSet.size) {
       setStatus('gate','idle','no_symbols');
@@ -456,12 +545,14 @@ export function createMarketHub({ symbols = [], gateSymbols = [], logger = conso
     connectBybit();
     connectOkx();
     connectGate();
+    connectKucoin();
   }
 
   function stop() {
     stopped = true;
     bybitGeneration += 1;
     okxGeneration += 1;
+    kucoinGeneration += 1;
     for (const timer of timers) clearTimeout(timer);
     timers.clear();
     for (const key of Object.keys(reconnectTimers)) {
@@ -476,6 +567,7 @@ export function createMarketHub({ symbols = [], gateSymbols = [], logger = conso
   function reconnect() {
     bybitGeneration += 1;
     okxGeneration += 1;
+    kucoinGeneration += 1;
     for (const timer of timers) clearTimeout(timer);
     timers.clear();
     for (const ws of Object.values(sockets)) {
@@ -487,6 +579,7 @@ export function createMarketHub({ symbols = [], gateSymbols = [], logger = conso
         connectBybit();
         connectOkx();
         connectGate();
+        connectKucoin();
       }
     },250);
   }
@@ -503,6 +596,7 @@ export function createMarketHub({ symbols = [], gateSymbols = [], logger = conso
         bybit:serialize(books.bybit),
         okx:serialize(books.okx),
         gate:serialize(books.gate),
+        kucoin:serialize(books.kucoin),
       },
     };
   }
