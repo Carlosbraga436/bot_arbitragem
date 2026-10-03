@@ -72,16 +72,16 @@ test('Bybit spot divide tópicos em lotes de no máximo 10', () => {
 });
 
 
-test('seleção monitorada prioriza liquidez comum e exclui identidade não confirmada', () => {
+test('seleção monitorada inclui apenas identidades confirmadas até o teto', () => {
   const candidates = [
-    { symbol:'BTCUSDT', identityConfirmed:true, commonTurnover24hUsdt:1000 },
-    { symbol:'ETHUSDT', identityConfirmed:true, commonTurnover24hUsdt:5000 },
-    { symbol:'TONUSDT', identityConfirmed:false, commonTurnover24hUsdt:999999 },
-    { symbol:'SHIBUSDT', identityConfirmed:true, commonTurnover24hUsdt:2500 },
-    { symbol:'AAVEUSDT', identityConfirmed:true, commonTurnover24hUsdt:1200 },
+    { symbol:'BTCUSDT', identityConfirmed:true },
+    { symbol:'ETHUSDT', identityConfirmed:true },
+    { symbol:'TONUSDT', identityConfirmed:false },
+    { symbol:'SHIBUSDT', identityConfirmed:true },
+    { symbol:'AAVEUSDT', identityConfirmed:true },
   ];
   const selected = selectConfirmedSymbols(candidates, 4);
-  assert.deepEqual(selected, ['ETHUSDT','SHIBUSDT','AAVEUSDT','BTCUSDT']);
+  assert.deepEqual(selected, ['AAVEUSDT','BTCUSDT','ETHUSDT','SHIBUSDT']);
   assert.ok(!selected.includes('TONUSDT'));
 });
 
@@ -97,11 +97,8 @@ test('catálogo dinâmico mantém somente par USDT ativo e idêntico nas duas ex
       {symbol:'DEFUSDT',baseCoin:'DIFFERENT',quoteCoin:'USDT',status:'Trading'},
       {symbol:'XYZUSDT',baseCoin:'XYZ',quoteCoin:'USDT',status:'Trading'},
     ],
-    binanceTickers:[{symbol:'ABCUSDT',quoteVolume:'9000'}],
-    bybitTickers:[{symbol:'ABCUSDT',turnover24h:'7000'}],
   });
   assert.deepEqual(markets.map((x)=>x.symbol), ['ABCUSDT']);
-  assert.equal(markets[0].commonTurnover24hUsdt, 7000);
   assert.equal(markets[0].identityConfirmed, true);
 });
 
