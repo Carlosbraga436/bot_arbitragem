@@ -1,9 +1,9 @@
 {
   "name": "radar-cripto-carlos",
-  "version": "0.17.0-recovery.1",
+  "version": "0.18.0-recovery.1",
   "private": true,
   "type": "module",
-  "description": "Radar Cripto Binance x Bybit com universo dinâmico de pares spot USDT. Somente leitura/simulação, sem ordens.",
+  "description": "Radar Cripto multi-exchange Binance x Bybit x OKX x Gate.io com universo dinâmico spot USDT. Somente leitura/simulação, sem ordens.",
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
