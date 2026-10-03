@@ -393,3 +393,66 @@ test('OKX USDT usa taker regular de 0,10% no modelo atual', () => {
   });
   assert.ok(r.tradingFeesUsdt > 0.19 && r.tradingFeesUsdt < 0.21);
 });
+
+
+test('capital selecionado funciona como teto e preserva oportunidade parcialmente executável', () => {
+  const maximumRules = { ...rules, budgetMode:'maximum' };
+  const limitedBookBuy = book(99.9,100,1);
+  const limitedBookSell = book(101.5,101.6,1);
+
+  const r500 = evaluateRoute({
+    symbol:'CAPUSDT',
+    identityConfirmed:true,
+    buyExchange:'binance',
+    sellExchange:'bybit',
+    buyBook:limitedBookBuy,
+    sellBook:limitedBookSell,
+    budgetUsdt:500,
+    costs,
+    rules:maximumRules,
+    now,
+  });
+
+  assert.equal(r500.eligible,true);
+  assert.equal(r500.requestedBudgetUsdt,500);
+  assert.equal(r500.executableBudgetUsdt,100);
+  assert.equal(r500.budgetUsdt,100);
+  assert.equal(r500.liquidityLimited,true);
+  assert.equal(r500.executionSharePct,20);
+
+  const r1000 = evaluateRoute({
+    symbol:'CAPUSDT',
+    identityConfirmed:true,
+    buyExchange:'binance',
+    sellExchange:'bybit',
+    buyBook:limitedBookBuy,
+    sellBook:limitedBookSell,
+    budgetUsdt:1000,
+    costs,
+    rules:maximumRules,
+    now,
+  });
+
+  assert.equal(r1000.eligible,true);
+  assert.equal(r1000.executableBudgetUsdt,100);
+  assert.equal(r1000.liquidityLimited,true);
+  assert.equal(r1000.executionSharePct,10);
+});
+
+test('modo exato antigo continua disponível para regressão', () => {
+  const exactRules = { ...rules, budgetMode:'exact' };
+  const r = evaluateRoute({
+    symbol:'CAPUSDT',
+    identityConfirmed:true,
+    buyExchange:'binance',
+    sellExchange:'bybit',
+    buyBook:book(99.9,100,1),
+    sellBook:book(101.5,101.6,1),
+    budgetUsdt:500,
+    costs,
+    rules:exactRules,
+    now,
+  });
+  assert.equal(r.eligible,false);
+  assert.equal(r.reason,'insufficient_buy_liquidity');
+});
