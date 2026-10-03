@@ -62,7 +62,13 @@ export function buildMultiExchangeUniverse({
       identityMethod: 'exact_base+USDT_exchange_catalog_or_live_probe',
     };
     current.venues[venue] = true;
-    if (Number.isFinite(Number(feePct)) && Number(feePct) >= 0) {
+    if (
+      feePct !== null
+      && feePct !== undefined
+      && feePct !== ''
+      && Number.isFinite(Number(feePct))
+      && Number(feePct) >= 0
+    ) {
       current.feePctByExchange[venue] = Number(feePct);
     }
     map.set(symbol, current);
