@@ -1,6 +1,6 @@
 import { consumeBase, consumeQuote, exchangeFeePct } from './core.js';
 import { depthCapacity, fetchCexDepth } from './cex-depth.js';
-import { transferStatusForRoute, validateCexNetwork } from './cex-network.js';
+import { validateCexRebalance } from './cex-network.js';
 import {
   CURATED_DEX_NAMES,
   CURATED_DEX_ID_ALIASES,
@@ -100,7 +100,7 @@ async function fetchJson(url, timeoutMs = 8_000, retries = 2) {
     try {
       const r = await fetch(url, {
         signal: controller.signal,
-        headers: { 'user-agent':'radar-cripto-carlos-dex/0.20' },
+        headers: { 'user-agent':'radar-cripto-carlos-dex/0.21.2' },
       });
 
       if (r.ok) return await r.json();
@@ -688,9 +688,11 @@ async function confirmCandidate(candidate, costs) {
     };
   }
 
-  const network=await validateCexNetwork(cexExchange,asset);
-  const rebalanceStatus=transferStatusForRoute(network);
+  const rebalance=await validateCexRebalance(cexExchange,asset,direction);
+  const rebalanceStatus=rebalance.status;
   const knownRestricted=rebalanceStatus==='restricted';
+  const tokenNetwork=rebalance.tokenNetwork;
+  const quoteNetwork=rebalance.quoteNetwork;
 
   return {
     ...search.best,
@@ -710,14 +712,20 @@ async function confirmCandidate(candidate, costs) {
     cexDepthSource:depth?.source||null,
     rebalanceStatus,
     transferabilityVerified:rebalanceStatus==='verified_open',
-    cexContractVerified:network?.contractVerified===true,
-    cexContractStatus:network?.contractStatus||'not_publicly_verifiable',
-    cexIdentityConfidence:network?.contractVerified===true
+    rebalanceRequirements:rebalance.requirements,
+    rebalanceVerifiedRequirements:rebalance.verifiedRequirements,
+    rebalanceRequirementCount:rebalance.totalRequirements,
+    cexContractVerified:tokenNetwork?.contractVerified===true,
+    cexContractStatus:tokenNetwork?.contractStatus||'not_publicly_verifiable',
+    cexIdentityConfidence:tokenNetwork?.contractVerified===true
       ? 'exact_public_contract_match'
-      : (network?.contractVerified===false?'contract_mismatch':'manual_mapping_contract_unverified'),
-    cexNetwork:network,
+      : (tokenNetwork?.contractVerified===false?'contract_mismatch':'manual_mapping_contract_unverified'),
+    quoteContractVerified:quoteNetwork?.contractVerified===true,
+    quoteContractStatus:quoteNetwork?.contractStatus||'not_publicly_verifiable',
+    cexNetwork:tokenNetwork,
+    quoteNetwork,
     knownNetworkRestriction:knownRestricted,
-    confirmationModel:'lifi_exact_contract_quote+100_level_cex_depth+explicit_cex_mapping+public_network_when_available',
+    confirmationModel:'lifi_exact_contract_quote+100_level_cex_depth+explicit_cex_mapping+directional_token_usdt_rebalance_validation_when_public',
   };
 }
 
