@@ -520,3 +520,17 @@ test('status de rebalance distingue rede verificada, restrita e não verificáve
     withdrawEnabled:null,
   }),'unverified');
 });
+
+
+test('DEX curada pode usar fallback de tool key sem relaxar identidade', () => {
+  const asset=DEX_ASSET_REGISTRY.find((x)=>x.cexSymbol==='LINKUSDT' && x.chain==='arbitrum');
+  assert.ok(asset);
+  assert.match(exactIdentityKey(asset),/^42161:0x[0-9a-f]{40}:LINKUSDT$/);
+});
+
+test('validação pública de rede mantém exchanges sem endpoint público como não verificadas', async () => {
+  const asset=DEX_ASSET_REGISTRY.find((x)=>x.cexSymbol==='LINKUSDT' && x.chain==='arbitrum');
+  const result=await (await import('../src/cex-network.js')).validateCexNetwork('okx',asset);
+  assert.equal(result.publicVerificationAvailable,false);
+  assert.equal(result.status,'not_verifiable_without_authenticated_exchange_api');
+});
