@@ -20,7 +20,7 @@ const TOKEN_CACHE_MS = 10 * 60_000;
 const QUOTE_CACHE_MS = 20_000;
 const MIN_POOL_LIQUIDITY_USD = 250_000;
 const MIN_PRELIMINARY_SPREAD_PCT = 0.25;
-const MAX_CONFIRMED_CANDIDATES = 6;
+const MAX_CONFIRMED_CANDIDATES = 2;
 const LIFI_SLIPPAGE = 0.005;
 const LIFI_TOOL_FALLBACK = Object.freeze([
   'uniswap',
@@ -355,7 +355,7 @@ async function lifiQuote({asset, direction, amountUnits}) {
     order: 'RECOMMENDED',
   });
 
-  const quote = await fetchJson(`${LIFI_BASE}/quote?${params.toString()}`, 12_000, 3);
+  const quote = await fetchJson(`${LIFI_BASE}/quote?${params.toString()}`, 7_000, 1);
   const tool = curatedQuoteTool(quote);
   if (!tool) {
     const seen = quoteToolCandidates(quote).join(',') || 'unknown';
@@ -514,7 +514,6 @@ async function confirmCandidate(candidate, costs) {
 export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
   validateRegistry();
   await Promise.all([refreshPools(),refreshTokenMetadata()]);
-  await refreshTools().catch(()=>{});
   const preliminary = preliminaryCandidates(snapshot,budgetUsdt);
   const confirmed = [];
 
@@ -548,6 +547,29 @@ export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
     .sort((a,b)=>b.netPnlUsdt-a.netPnlUsdt)
     .slice(0,5);
 
+  const preliminaryTop5 = preliminary.slice(0,5).map((x)=>({
+    kind:'DEX_CEX_PRELIMINARY',
+    eligible:false,
+    confirmedExecutable:false,
+    symbol:x.asset.cexSymbol,
+    asset:x.asset.symbol,
+    chain:chainForAsset(x.asset)?.name,
+    chainId:chainForAsset(x.asset)?.chainId,
+    contract:x.asset.address,
+    identityKey:exactIdentityKey(x.asset),
+    sameAssetVerified:true,
+    identityMethod:'manual_cex_mapping+chainId+exact_contract',
+    dex:x.pool.dexId,
+    poolLiquidityUsd:x.pool.liquidityUsd,
+    poolVolume24hUsd:x.pool.volume24hUsd,
+    pairUrl:x.pool.url,
+    direction:x.direction,
+    buyVenue:x.direction==='dex_to_cex' ? x.pool.dexId : x.cex.bestBuy.exchange,
+    sellVenue:x.direction==='dex_to_cex' ? x.cex.bestSell.exchange : x.pool.dexId,
+    preliminarySpreadPct:x.preliminarySpreadPct,
+    status:'awaiting_executable_quote',
+  }));
+
   return {
     generatedAt:Date.now(),
     mode:'same-chain-read-only',
@@ -558,8 +580,9 @@ export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
     minPoolLiquidityUsd:MIN_POOL_LIQUIDITY_USD,
     registryAssets:DEX_ASSET_REGISTRY.length,
     poolsFound:state.poolsByIdentity.size,
-    lifiDexTools:state.toolKeys,
+    lifiDexTools:state.toolKeys.length ? state.toolKeys : LIFI_TOOL_FALLBACK,
     preliminaryCount:preliminary.length,
+    preliminaryTop5,
     confirmedCount:valid.length,
     positiveCount:valid.filter((x)=>x.eligible).length,
     top5:positives,
