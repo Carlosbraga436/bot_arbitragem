@@ -67,6 +67,8 @@ export async function fetchCexDepth(exchange, symbol, limit = 100) {
     const urls=[
       `https://data-api.binance.vision/api/v3/depth?symbol=${encodeURIComponent(formatted)}&limit=${lim}`,
       `https://api.binance.com/api/v3/depth?symbol=${encodeURIComponent(formatted)}&limit=${lim}`,
+      `https://api1.binance.com/api/v3/depth?symbol=${encodeURIComponent(formatted)}&limit=${lim}`,
+      `https://api2.binance.com/api/v3/depth?symbol=${encodeURIComponent(formatted)}&limit=${lim}`,
     ];
     return fetchFirst(urls,(data)=>({
       exchange:ex,
