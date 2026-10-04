@@ -12,6 +12,9 @@ function chainAliases(asset) {
   if (!chain) return [];
   if (chain.chainId===1) return ['eth','ethereum','erc20','etherc20','ethereumerc20'];
   if (chain.chainId===42161) return ['arb','arbitrum','arbitrumone','arbitrumonearb'];
+  if (chain.chainId===8453) return ['base','baseeth'];
+  if (chain.chainId===137) return ['matic','polygon','polygonpos'];
+  if (chain.chainId===56) return ['bsc','bnbsmartchain','bep20','bnbchain'];
   return [normalizedLabel(chain.name)];
 }
 
@@ -61,7 +64,7 @@ async function fetchJson(url, timeoutMs=6000) {
   try {
     const r=await fetch(url,{
       signal:controller.signal,
-      headers:{'user-agent':'radar-cripto-carlos-network/0.22.1'},
+      headers:{'user-agent':'radar-cripto-carlos-network/0.23.0'},
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return await r.json();
