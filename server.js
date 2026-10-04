@@ -206,6 +206,27 @@ async function ensureRuntime() {
         }
       },15_000);
 
+      setTimeout(async()=>{
+        try {
+          const dex=await dexRadarSnapshot(runtime,100);
+          console.log('[dex-diagnostics-100]',JSON.stringify({
+            version:dex.version,
+            mode:dex.mode,
+            registryAssets:dex.registryAssets,
+            poolsFound:dex.poolsFound,
+            lifiDexTools:dex.lifiDexTools,
+            preliminaryCount:dex.preliminaryCount,
+            confirmedCount:dex.confirmedCount,
+            positiveCount:dex.positiveCount,
+            top5:dex.top5,
+            nearest5:dex.nearest5,
+            errors:dex.errors,
+          }));
+        } catch (error) {
+          console.warn('[dex-diagnostics] falhou:',error?.message || error);
+        }
+      },25_000);
+
       return runtime;
     })().catch((error)=>{
       runtimePromise=null;
