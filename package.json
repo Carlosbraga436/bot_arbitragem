@@ -1,13 +1,13 @@
 {
   "name": "radar-cripto-carlos",
-  "version": "0.19.1-recovery.1",
+  "version": "0.20.0-recovery.1",
   "private": true,
   "type": "module",
-  "description": "Radar Cripto multi-exchange Binance x Bybit x OKX x Gate.io x KuCoin com universo dinâmico spot USDT. Somente leitura/simulação, sem ordens.",
+  "description": "Radar Cripto multi-exchange CEX + DEX same-chain com identidade por contrato exato. Somente leitura/simulação, sem ordens.",
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
-    "check": "node --check server.js && node --check src/core.js && node --check src/market-hub.js && node --check public/app.js && node --check scripts/diagnose-live.js",
+    "check": "node --check server.js && node --check src/core.js && node --check src/market-hub.js && node --check src/dex-registry.js && node --check src/dex-radar.js && node --check public/app.js && node --check scripts/diagnose-live.js",
     "diagnose": "node scripts/diagnose-live.js"
   },
   "engines": {
