@@ -147,45 +147,53 @@ function renderDexRadar(data) {
   state.lastDexRadar=data;
   const positives=Array.isArray(data?.top5)?data.top5:[];
   const nearest=Array.isArray(data?.nearest5)?data.nearest5:[];
-  const shown=positives.length?positives:nearest;
+  const preliminary=Array.isArray(data?.preliminaryTop5)?data.preliminaryTop5:[];
+  const shown=positives.length?positives:(nearest.length?nearest:preliminary);
   const best=shown[0]||null;
 
   $('dexSummary').textContent=
-    `${Number(data?.registryAssets||0)} identidades contratuais · `+
-    `${Number(data?.poolsFound||0)} pools válidos · `+
-    `${Number(data?.confirmedCount||0)} rotas confirmadas · `+
+    `${Number(data?.registryAssets||0).toLocaleString('pt-BR')} identidades contratuais · `+
+    `${Number(data?.poolsFound||0).toLocaleString('pt-BR')} pools válidos · `+
+    `${Number(data?.confirmedCount||0).toLocaleString('pt-BR')} rotas confirmadas · `+
     `${Number(data?.positiveCount||0)} positivas`;
 
   $('dexTableTitle').textContent=positives.length
     ? 'Top DEX ↔ CEX confirmadas'
-    : 'DEX ↔ CEX mais próximas do positivo';
+    : (nearest.length ? 'DEX ↔ CEX confirmadas mais próximas' : 'Pré-candidatas DEX ↔ CEX — aguardando quote');
 
   if (best) {
     const direction=`${dexVenueLabel(best.buyVenue)} → ${dexVenueLabel(best.sellVenue)}`;
+    const confirmed=best.confirmedExecutable !== false && Number.isFinite(Number(best.netPnlUsdt));
+    const spread=confirmed ? Number(best.grossSpreadPct) : Number(best.preliminarySpreadPct);
+
     $('dexBest').innerHTML=`
-      <h2>${best.asset} <span class="${best.eligible?'profit':''}">${money(best.netPnlUsdt)}</span></h2>
+      <h2>${best.asset} ${confirmed?`<span class="${best.eligible?'profit':''}">${money(best.netPnlUsdt)}</span>`:'<span class="neg">NÃO CONFIRMADA</span>'}</h2>
       <div class="heroRoute">${direction}</div>
       <div class="heroMetrics">
-        <span><small>Spread confirmado</small><b class="${best.eligible?'pos':''}">${Number(best.grossSpreadPct)>=0?'+':''}${fmt(best.grossSpreadPct,3)}%</b></span>
+        <span><small>${confirmed?'Spread confirmado':'Spread indicativo'}</small><b class="${best.eligible?'pos':''}">${spread>=0?'+':''}${fmt(spread,3)}%</b></span>
         <span><small>Rede</small><b>${best.chain}</b></span>
         <span><small>Contrato</small><b>${shortAddress(best.contract)}</b></span>
-        <span><small>Gas estimado</small><b>${money(-Number(best.gasUsd||0))}</b></span>
+        <span><small>Gas estimado</small><b>${confirmed?money(-Number(best.gasUsd||0)):'—'}</b></span>
         <span><small>Liquidez pool</small><b>${Number(best.poolLiquidityUsd||0).toLocaleString('pt-BR',{style:'currency',currency:'USD',maximumFractionDigits:0})}</b></span>
       </div>
-      <p>Identidade: chainId ${best.chainId} + contrato exato + mapeamento CEX explícito. Screening LI.FI: ${best.screeningStatus}. A rota é same-chain e assume inventário pré-posicionado; depósito/saque para rebalanceamento ainda não foi validado.</p>`;
+      <p>Identidade: chainId ${best.chainId} + contrato exato + mapeamento CEX explícito. ${confirmed?`Screening LI.FI: ${best.screeningStatus}.`:'Quote executável ainda não confirmado — não usar esta linha para executar.'} A rota é same-chain e assume inventário pré-posicionado; depósito/saque para rebalanceamento ainda não foi validado.</p>`;
   } else {
-    $('dexBest').innerHTML='<h2>—</h2><p>Nenhuma rota DEX ↔ CEX confirmou spread suficiente agora. O radar só aceita contrato exato; ticker sozinho nunca é usado como identidade.</p>';
+    $('dexBest').innerHTML='<h2>—</h2><p>Nenhuma rota DEX ↔ CEX detectada neste ciclo. O radar só aceita contrato exato; ticker sozinho nunca é usado como identidade.</p>';
   }
 
   $('dexRows').innerHTML=shown.length
-    ? shown.map((r)=>`<tr>
+    ? shown.map((r)=>{
+        const confirmed=r.confirmedExecutable !== false && Number.isFinite(Number(r.netPnlUsdt));
+        const spread=confirmed ? Number(r.grossSpreadPct) : Number(r.preliminarySpreadPct);
+        return `<tr>
         <td><b>${r.asset}</b><small class="priceLine">${r.chain} · ${shortAddress(r.contract)}</small></td>
         <td><b class="routeText">${dexVenueLabel(r.buyVenue)} → ${dexVenueLabel(r.sellVenue)}</b><small class="priceLine">DEX: ${r.dex}</small></td>
-        <td class="${r.eligible?'pos':''}">${Number(r.grossSpreadPct)>=0?'+':''}${fmt(r.grossSpreadPct,3)}%</td>
-        <td class="${r.eligible?'pos':'neg'}">${money(r.netPnlUsdt)}</td>
-        <td>${r.sameAssetVerified?'contrato ✓':'bloqueado'}</td>
-      </tr>`).join('')
-    : '<tr><td colspan="5">Nenhuma rota DEX ↔ CEX confirmada neste ciclo.</td></tr>';
+        <td class="${r.eligible?'pos':''}">${spread>=0?'+':''}${fmt(spread,3)}%</td>
+        <td class="${r.eligible?'pos':'neg'}">${confirmed?money(r.netPnlUsdt):'aguardando quote'}</td>
+        <td>${r.sameAssetVerified?(confirmed?'contrato ✓':'contrato ✓ · não executar'):'bloqueado'}</td>
+      </tr>`;
+      }).join('')
+    : '<tr><td colspan="5">Nenhuma rota DEX ↔ CEX detectada neste ciclo.</td></tr>';
 }
 
 async function fetchDexRadar() {
