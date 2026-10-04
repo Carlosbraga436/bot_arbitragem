@@ -12,6 +12,7 @@ import {
   CURATED_DEX_NAMES,
   CURATED_DEX_ID_ALIASES,
   DEX_ASSET_REGISTRY,
+  DEX_CHAINS,
   buildAutoAssetRegistry,
   chainForAsset,
   exactIdentityKey,
@@ -41,17 +42,33 @@ const TRUSTED_POOL_QUOTES = Object.freeze({
     '0x6b175474e89094c44da98b954eedeac495271d0f', // DAI
   ]),
   arbitrum: new Set([
-    '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9', // USDT
-    '0xaf88d065e77c8cc2239327c5edb3a432268e5831', // native USDC
-    '0xff970a61a04b1ca14834a43f5de4533ebddb5cc8', // bridged USDC.e
-    '0x82af49447d8a07e3bd95bd0d56f35241523fbab1', // WETH
-    '0xda10009cbd5d07dd0cecc66161fc93d7c9000da1', // DAI
+    '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9',
+    '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+    '0xff970a61a04b1ca14834a43f5de4533ebddb5cc8',
+    '0x82af49447d8a07e3bd95bd0d56f35241523fbab1',
+    '0xda10009cbd5d07dd0cecc66161fc93d7c9000da1',
+  ]),
+  base: new Set([
+    '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', // USDC
+    '0x4200000000000000000000000000000000000006', // WETH
+  ]),
+  polygon: new Set([
+    '0xc2132d05d31c914a87c6611c10748aacbb58e8f', // USDT
+    '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359', // native USDC
+    '0x2791bca1f2de4661ed88a30c99a7a9449aa84174', // USDC.e
+    '0x7ceb23fd6bc0add59e62ac25578270cff1b9f619', // WETH
+    '0x8f3cf7ad23cd3cadbd9735aff958023239c6a063', // DAI
+  ]),
+  bsc: new Set([
+    '0x55d398326f99059ff775485246999027b3197955', // USDT
+    '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d', // USDC
+    '0x2170ed0880ac9a755fd29b2688956bd959f933f8', // ETH
   ]),
 });
 const MIN_PRELIMINARY_SPREAD_PCT = 0.25;
 const MIN_CONFIRM_SPREAD_PCT = 0.50;
-const MAX_DIRECT_CONFIRMATIONS = 3;
-const MAX_FALLBACK_CONFIRMATIONS = 1;
+const MAX_DIRECT_CONFIRMATIONS = 4;
+const MAX_FALLBACK_CONFIRMATIONS = 3;
 const DEXSCREENER_BATCH_SIZE = 25;
 const LIFI_SLIPPAGE = 0.005;
 const DIRECT_SLIPPAGE_BPS = 50;
@@ -67,6 +84,8 @@ const LIFI_TOOL_FALLBACK = Object.freeze([
   'balancer',
   'pancakeswap',
   'camelot',
+  'aerodrome',
+  'quickswap',
 ]);
 
 const state = {
@@ -135,7 +154,7 @@ async function fetchJson(url, timeoutMs = 8_000, retries = 2) {
     try {
       const r = await fetch(url, {
         signal: controller.signal,
-        headers: { 'user-agent':'radar-cripto-carlos-dex/0.22.1' },
+        headers: { 'user-agent':'radar-cripto-carlos-dex/0.23.0' },
       });
 
       if (r.ok) return await r.json();
@@ -189,7 +208,7 @@ function flattenLifiTokens(payload) {
 
 async function getLifiTokenPayload() {
   if (state.lifiTokenPayload && Date.now()-state.lifiTokenFetchedAt<TOKEN_CACHE_MS) return state.lifiTokenPayload;
-  const chainIds=[...new Set(Object.values(DEX_ASSET_REGISTRY).map((asset)=>chainForAsset(asset)?.chainId).filter(Boolean))];
+  const chainIds=[...new Set(Object.values(DEX_CHAINS).map((chain)=>chain?.chainId).filter(Boolean))];
   const url=`${LIFI_BASE}/tokens?chains=${chainIds.join(',')}`;
   const payload=await fetchJson(url,10_000,2);
   state.lifiTokenPayload=payload;
