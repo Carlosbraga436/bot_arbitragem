@@ -261,10 +261,21 @@ export function buildAutoAssetRegistry({
 } = {}) {
   const out = [];
   const seen = new Set(DEX_ASSET_REGISTRY.map(exactIdentityKey));
+  const lifiContractSet=new Set(
+    (Array.isArray(lifiTokens)?lifiTokens:[])
+      .filter((token)=>Number.isFinite(Number(token?.chainId)) && /^0x[0-9a-fA-F]{40}$/.test(String(token?.address||'')))
+      .map((token)=>`${Number(token.chainId)}:${normalizeAddress(token.address)}`)
+  );
 
   for (const spec of allowlist) {
     const chain = DEX_CHAINS[spec?.chain];
     if (!chain || !spec?.cexSymbol || !spec?.symbol) continue;
+
+    // Fail closed if the settlement token configured for a chain is not known
+    // by the independent LI.FI token registry. This caught config/address drift
+    // before the chain can contribute a DEX opportunity.
+    const settlementKey=`${chain.chainId}:${normalizeAddress(chain.quoteAddress)}`;
+    if (!lifiContractSet.has(settlementKey)) continue;
 
     const uniswapMatches = listTokensForChainSymbol(uniswapTokens, chain.chainId, spec.symbol);
     // Ambiguous symbols are intentionally rejected instead of guessing a token.
@@ -290,6 +301,7 @@ export function buildAutoAssetRegistry({
       address: token.address,
       decimals,
       identitySource: 'uniswap_token_list+lifi_exact_contract_agreement',
+      settlementQuoteVerified: true,
     });
 
     const key = exactIdentityKey(asset);
