@@ -172,7 +172,7 @@ function renderDexRadar(data) {
       ['Líquido +',funnel.economicsPositiveRoutes],
     ];
     const reasonText=[
-      reasons.noLiquidPool?`${reasons.noLiquidPool} sem pool ≥ US$250k`:null,
+      reasons.noLiquidPool?`${reasons.noLiquidPool} sem pool de referência confiável`:null,
       reasons.noCexBook?`${reasons.noCexBook} sem book CEX`:null,
       reasons.spreadBelowPreliminary?`${reasons.spreadBelowPreliminary} sem spread mínimo`:null,
       reasons.belowConfirmationThreshold?`${reasons.belowConfirmationThreshold} abaixo de 0,50%`:null,
