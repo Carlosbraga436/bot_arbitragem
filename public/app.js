@@ -152,13 +152,42 @@ function renderDexRadar(data) {
   const best=shown[0]||null;
 
   $('dexSummary').textContent=
-    `${Number(data?.registryAssets||0).toLocaleString('pt-BR')} identidades contratuais · `+
-    `${Number(data?.poolsFound||0).toLocaleString('pt-BR')} pools válidos · `+
-    `${Number(data?.confirmedCount||0).toLocaleString('pt-BR')} rotas confirmadas · `+
-    `${Number(data?.depthConfirmedCount||0).toLocaleString('pt-BR')} com depth · `+
-    `${Number(data?.transferVerifiedCount||0).toLocaleString('pt-BR')} redes verificadas · `+
-    `${Number(data?.positiveCount||0)} positivas`;
+    `${Number(data?.registryAssets||0).toLocaleString('pt-BR')} identidades (`+
+    `${Number(data?.manualRegistryAssets||0)} fixas + ${Number(data?.autoVerifiedAssets||0)} auto-verificadas) · `+
+    `${Number(data?.poolsFound||0).toLocaleString('pt-BR')} pools líquidos · `+
+    `${Number(data?.confirmedCount||0).toLocaleString('pt-BR')} confirmadas · `+
+    `${Number(data?.positiveCount||0)} elegíveis`;
 
+  const funnel=data?.funnel||{};
+  const reasons=funnel?.dropReasons||{};
+  const funnelEl=$('dexFunnel');
+  if (funnelEl) {
+    const steps=[
+      ['Identidades',funnel.identities],
+      ['Pool líquido',funnel.withLiquidPool],
+      ['CEX comparável',funnel.cexComparable],
+      ['Spread ≥ 0,25%',funnel.preliminaryRoutes],
+      ['Forte ≥ 0,50%',funnel.strongRoutes],
+      ['Confirmadas',funnel.confirmedRoutes],
+      ['Líquido +',funnel.economicsPositiveRoutes],
+    ];
+    const reasonText=[
+      reasons.noLiquidPool?`${reasons.noLiquidPool} sem pool ≥ US$250k`:null,
+      reasons.noCexBook?`${reasons.noCexBook} sem book CEX`:null,
+      reasons.spreadBelowPreliminary?`${reasons.spreadBelowPreliminary} sem spread mínimo`:null,
+      reasons.belowConfirmationThreshold?`${reasons.belowConfirmationThreshold} abaixo de 0,50%`:null,
+      reasons.noQuoteAdapter?`${reasons.noQuoteAdapter} sem quote compatível`:null,
+      reasons.waitingConfirmationBudget?`${reasons.waitingConfirmationBudget} aguardando confirmação`:null,
+      reasons.confirmationError?`${reasons.confirmationError} erro de confirmação`:null,
+      reasons.nonPositiveAfterCosts?`${reasons.nonPositiveAfterCosts} negativas após custos`:null,
+      reasons.knownNetworkRestriction?`${reasons.knownNetworkRestriction} com rede restrita`:null,
+      reasons.rebalanceUnverified?`${reasons.rebalanceUnverified} rebalance não verificável`:null,
+    ].filter(Boolean).join(' · ');
+
+    funnelEl.innerHTML=`<div class="funnelSteps">${steps.map(([label,value],i)=>
+      `<div class="funnelStep"><small>${label}</small><b>${Number(value||0).toLocaleString('pt-BR')}</b></div>${i<steps.length-1?'<span class="funnelArrow">→</span>':''}`
+    ).join('')}</div><div class="funnelReasons">${reasonText||'Nenhum descarte relevante neste ciclo.'}</div>`;
+  }
   $('dexTableTitle').textContent=positives.length
     ? 'Top DEX ↔ CEX confirmadas'
     : (nearest.length ? 'DEX ↔ CEX confirmadas mais próximas' : 'Pré-candidatas DEX ↔ CEX — aguardando quote');
@@ -175,6 +204,7 @@ function renderDexRadar(data) {
         <span><small>${confirmed?'Spread confirmado':'Spread indicativo'}</small><b class="${best.eligible?'pos':''}">${spread>=0?'+':''}${fmt(spread,3)}%</b></span>
         <span><small>Máx. lucrativo agora</small><b>${confirmed&&Number.isFinite(Number(best.maxProfitableBudgetUsdt))?`${fmt(best.maxProfitableBudgetUsdt,2)} USDT`:'—'}</b></span>
         <span><small>Depth CEX</small><b>${best.depthConfirmed?`${best.cexDepthLevels||0} níveis ✓`:'—'}</b></span>
+        <span><small>Confirmação DEX</small><b>${confirmed?(best.quoteSource==='direct_onchain'?'direta on-chain ✓':(best.quoteSource==='lifi_fallback'?'LI.FI fallback':'confirmada')):(best.quoteAdapter||'aguardando')}</b></span>
         <span><small>Rede</small><b>${best.chain}</b></span>
         <span><small>Contrato DEX</small><b>${shortAddress(best.contract)}</b></span>
         <span><small>Token na CEX</small><b>${best.cexContractVerified===true?'match exato ✓':(best.cexContractVerified===false?'DIVERGENTE':'não público')}</b></span>
@@ -183,7 +213,7 @@ function renderDexRadar(data) {
         <span><small>Gas estimado</small><b>${confirmed?money(-Number(best.gasUsd||0)):'—'}</b></span>
         <span><small>Liquidez pool</small><b>${Number(best.poolLiquidityUsd||0).toLocaleString('pt-BR',{style:'currency',currency:'USD',maximumFractionDigits:0})}</b></span>
       </div>
-      <p>Identidade DEX: chainId ${best.chainId} + contrato exato. O símbolo da CEX é mapeado manualmente e nunca inferido só pelo ticker. ${confirmed?`Screening LI.FI: ${best.screeningStatus}. Order book da CEX confirmado em múltiplos níveis.`:'Quote executável ainda não confirmado — não usar esta linha para executar.'} ${best.knownNetworkRestriction?'Uma das pernas necessárias ao rebalanceamento token/USDT está publicamente restrita ou divergente e a rota foi bloqueada.':(best.transferabilityVerified?'As duas pernas direcionais do rebalanceamento foram verificadas publicamente na mesma rede e com contratos compatíveis.':'Quando a CEX não expõe todos os dados públicos de token e USDT, o radar mantém o rebalanceamento como não verificado, sem fingir garantia.')} A execução continua em modo read-only.</p>`;
+      <p>Identidade DEX: chainId ${best.chainId} + contrato exato. Mapeamentos automáticos só entram após concordância do contrato entre lista oficial Uniswap e LI.FI; nenhum token arbitrário é aceito apenas pelo ticker. ${confirmed?`Quote: ${best.quoteSourceLabel||best.quoteSource||'confirmado'}. Screening: ${best.screeningStatus}. Order book da CEX confirmado em múltiplos níveis.`:'Quote executável ainda não confirmado — não usar esta linha para executar.'} ${best.knownNetworkRestriction?'Uma das pernas necessárias ao rebalanceamento token/USDT está publicamente restrita ou divergente e a rota foi bloqueada.':(best.transferabilityVerified?'As duas pernas direcionais do rebalanceamento foram verificadas publicamente na mesma rede e com contratos compatíveis.':'Quando a CEX não expõe todos os dados públicos de token e USDT, o radar mantém o rebalanceamento como não verificado, sem fingir garantia.')} A execução continua em modo read-only.</p>`;
   } else {
     $('dexBest').innerHTML='<h2>—</h2><p>Nenhuma rota DEX ↔ CEX detectada neste ciclo. O radar só aceita contrato exato; ticker sozinho nunca é usado como identidade.</p>';
   }
