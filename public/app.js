@@ -1,4 +1,4 @@
-const EXCHANGES=['binance','bybit','okx','gate','kucoin'];
+const EXCHANGES=['binance','bybit','okx','gate','kucoin','bitget','htx'];
 
 const state={
   budget:100,
@@ -22,6 +22,8 @@ const exchangeLabel=(name)=>({
   okx:'OKX',
   gate:'Gate.io',
   kucoin:'KuCoin',
+  bitget:'Bitget',
+  htx:'HTX',
 }[name]||name||'—');
 
 const directionLabel=(r)=>r?.buyExchange&&r?.sellExchange
@@ -58,6 +60,50 @@ function stopPolling() {
   state.dexTimer=null;
 }
 
+function priceDigits(value) {
+  const n=Number(value);
+  if (!Number.isFinite(n) || n<=0) return 4;
+  if (n>=1000) return 2;
+  if (n>=10) return 3;
+  if (n>=1) return 4;
+  if (n>=0.01) return 6;
+  return 8;
+}
+
+function venuePriceMatrix(result) {
+  const quotes=Array.isArray(result?.venueQuotes)?result.venueQuotes:[];
+  if (!quotes.length) return '';
+  const byExchange=new Map(quotes.map((q)=>[q.exchange,q]));
+  const cards=EXCHANGES.map((exchange)=>byExchange.get(exchange)).filter(Boolean).map((q)=>{
+    const buy=q.exchange===result?.buyExchange;
+    const sell=q.exchange===result?.sellExchange;
+    const stale=Number(q.ageMs)>5000;
+    const tag=buy?'COMPRAR':(sell?'VENDER':'');
+    const cls=[buy?'buyPick':'',sell?'sellPick':'',stale?'stalePrice':''].filter(Boolean).join(' ');
+    return `<div class="venuePriceCard ${cls}">
+      <div class="venuePriceHead"><b>${exchangeLabel(q.exchange)}</b>${tag?`<em>${tag}</em>`:''}</div>
+      <strong>${fmt(q.mid,priceDigits(q.mid))}</strong>
+      <small>Compra ${fmt(q.ask,priceDigits(q.ask))}</small>
+      <small>Venda ${fmt(q.bid,priceDigits(q.bid))}</small>
+      ${stale?'<small class="staleTag">cotação atrasada</small>':''}
+    </div>`;
+  }).join('');
+  return `<div class="priceMatrix">
+    <div class="priceMatrixTitle"><b>Preço da moeda em cada casa</b><small>Referência no centro · compra = ask · venda = bid</small></div>
+    <div class="priceRail">${cards}</div>
+  </div>`;
+}
+
+function compactVenuePrices(result) {
+  const quotes=Array.isArray(result?.venueQuotes)?result.venueQuotes:[];
+  if (!quotes.length) return '';
+  return `<small class="venueCompact">${EXCHANGES.map((exchange)=>{
+    const q=quotes.find((x)=>x.exchange===exchange);
+    if (!q) return null;
+    const mark=q.exchange===result?.buyExchange?'↓':(q.exchange===result?.sellExchange?'↑':'');
+    return `<span>${mark}${exchangeLabel(q.exchange)} ${fmt(q.mid,priceDigits(q.mid))}</span>`;
+  }).filter(Boolean).join('')}</small>`;
+}
 function renderRadar(data) {
   state.lastRadar=data;
   for (const exchange of EXCHANGES) applyStatus(exchange,data?.status?.[exchange]);
@@ -102,6 +148,7 @@ function renderRadar(data) {
         <span><small>Após recomposição</small><b class="${Number(best.netAfterRebalanceUsdt)>=0?'pos':'neg'}">${money(best.netAfterRebalanceUsdt)}</b></span>
         <span><small>${eligible?'Breakeven execução':'Falta p/ breakeven'}</small><b>${eligible?fmt(breakEven,3)+'%':fmt(gapPct,3)+' p.p.'}</b></span>
       </div>
+      ${venuePriceMatrix(best)}
       <p>Comprar em ${exchangeLabel(best.buyExchange)} @ ${fmt(best.buyVwap,8)} · vender em ${exchangeLabel(best.sellExchange)} @ ${fmt(best.sellVwap,8)} · ROI da execução ${fmt(best.roiOnTotalCapitalPct,3)}%. ${limited?`Com limite de ${fmt(requested,0)} USDT, o book atualmente visível comporta ${fmt(executable,2)} USDT nesta rota.`:'O valor máximo selecionado cabe integralmente no book visível.'} A recomposição é estimada separadamente.</p>`;
   } else {
     $('bestLabel').textContent='MELHOR CANDIDATA AGORA';
@@ -120,7 +167,7 @@ function renderRadar(data) {
         const breakEven=Number(r?.breakEvenPct);
         const cls=eligible?'pos':'neg';
         return `<tr>
-          <td><b>${r.symbol}</b></td>
+          <td><b>${r.symbol}</b>${compactVenuePrices(r)}</td>
           <td><b class="routeText">${directionLabel(r)}</b><small class="priceLine">Compra ${fmt(r.buyVwap,8)} · Venda ${fmt(r.sellVwap,8)}</small></td>
           <td class="${eligible?'pos':''}">${grossPct>=0?'+':''}${fmt(grossPct,3)}%</td>
           <td class="${cls}">${money(r.netPnlUsdt)}<small class="priceLine">Pós-rebalance ${money(r.netAfterRebalanceUsdt)}</small></td>
