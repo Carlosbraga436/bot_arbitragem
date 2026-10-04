@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyOrderBookMessage, evaluateAcrossExchanges, evaluatePair, evaluateRoute, topPositive } from '../src/core.js';
 import { DEX_ASSET_REGISTRY, exactIdentityKey, validateRegistry } from '../src/dex-registry.js';
+import { cexSymbolFormat, depthCapacity } from '../src/cex-depth.js';
+import { transferStatusForRoute } from '../src/cex-network.js';
 import { BINANCE_DISCOVERY_STREAM, buildCommonUsdtMarkets, buildMultiExchangeUniverse, chunkTopics, createMarketHub, MAX_MONITORED_SYMBOLS, selectConfirmedSymbols, selectDiscoveredBinanceSymbols } from '../src/market-hub.js';
 
 const now = 1_800_000_000_000;
@@ -477,4 +479,44 @@ test('registro DEX contém apenas contratos EVM explícitos e sem duplicata de i
     assert.match(asset.address,/^0x[0-9a-fA-F]{40}$/);
     assert.ok(asset.cexSymbol.endsWith('USDT'));
   }
+});
+
+
+test('formatador de símbolos de depth respeita convenção de cada CEX', () => {
+  assert.equal(cexSymbolFormat('binance','BTCUSDT'),'BTCUSDT');
+  assert.equal(cexSymbolFormat('bybit','BTCUSDT'),'BTCUSDT');
+  assert.equal(cexSymbolFormat('okx','BTCUSDT'),'BTC-USDT');
+  assert.equal(cexSymbolFormat('kucoin','BTCUSDT'),'BTC-USDT');
+  assert.equal(cexSymbolFormat('gate','BTCUSDT'),'BTC_USDT');
+});
+
+test('capacidade de depth soma múltiplos níveis em base e quote', () => {
+  const cap=depthCapacity({
+    bids:[[100,1],[99,2]],
+    asks:[[101,1.5],[102,2]],
+  });
+  assert.equal(cap.bidBase,3);
+  assert.equal(cap.bidQuote,298);
+  assert.equal(cap.askBase,3.5);
+  assert.equal(cap.askQuote,355.5);
+});
+
+test('status de rebalance distingue rede verificada, restrita e não verificável', () => {
+  assert.equal(transferStatusForRoute({
+    publicVerificationAvailable:true,
+    networkMatched:true,
+    depositEnabled:true,
+    withdrawEnabled:true,
+  }),'verified_open');
+  assert.equal(transferStatusForRoute({
+    publicVerificationAvailable:true,
+    networkMatched:true,
+    depositEnabled:false,
+    withdrawEnabled:true,
+  }),'restricted');
+  assert.equal(transferStatusForRoute({
+    publicVerificationAvailable:false,
+    depositEnabled:null,
+    withdrawEnabled:null,
+  }),'unverified');
 });
