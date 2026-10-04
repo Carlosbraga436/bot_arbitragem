@@ -155,6 +155,8 @@ function renderDexRadar(data) {
     `${Number(data?.registryAssets||0).toLocaleString('pt-BR')} identidades contratuais · `+
     `${Number(data?.poolsFound||0).toLocaleString('pt-BR')} pools válidos · `+
     `${Number(data?.confirmedCount||0).toLocaleString('pt-BR')} rotas confirmadas · `+
+    `${Number(data?.depthConfirmedCount||0).toLocaleString('pt-BR')} com depth · `+
+    `${Number(data?.transferVerifiedCount||0).toLocaleString('pt-BR')} redes verificadas · `+
     `${Number(data?.positiveCount||0)} positivas`;
 
   $('dexTableTitle').textContent=positives.length
@@ -171,12 +173,15 @@ function renderDexRadar(data) {
       <div class="heroRoute">${direction}</div>
       <div class="heroMetrics">
         <span><small>${confirmed?'Spread confirmado':'Spread indicativo'}</small><b class="${best.eligible?'pos':''}">${spread>=0?'+':''}${fmt(spread,3)}%</b></span>
+        <span><small>Máx. lucrativo agora</small><b>${confirmed&&Number.isFinite(Number(best.maxProfitableBudgetUsdt))?`${fmt(best.maxProfitableBudgetUsdt,2)} USDT`:'—'}</b></span>
+        <span><small>Depth CEX</small><b>${best.depthConfirmed?`${best.cexDepthLevels||0} níveis ✓`:'—'}</b></span>
         <span><small>Rede</small><b>${best.chain}</b></span>
         <span><small>Contrato</small><b>${shortAddress(best.contract)}</b></span>
+        <span><small>Rebalance</small><b>${best.rebalanceStatus==='verified_open'?'rede aberta ✓':(best.rebalanceStatus==='restricted'?'RESTRITA':'não verificado')}</b></span>
         <span><small>Gas estimado</small><b>${confirmed?money(-Number(best.gasUsd||0)):'—'}</b></span>
         <span><small>Liquidez pool</small><b>${Number(best.poolLiquidityUsd||0).toLocaleString('pt-BR',{style:'currency',currency:'USD',maximumFractionDigits:0})}</b></span>
       </div>
-      <p>Identidade: chainId ${best.chainId} + contrato exato + mapeamento CEX explícito. ${confirmed?`Screening LI.FI: ${best.screeningStatus}.`:'Quote executável ainda não confirmado — não usar esta linha para executar.'} A rota é same-chain e assume inventário pré-posicionado; depósito/saque para rebalanceamento ainda não foi validado.</p>`;
+      <p>Identidade: chainId ${best.chainId} + contrato exato + mapeamento CEX explícito. ${confirmed?`Screening LI.FI: ${best.screeningStatus}. Order book da CEX confirmado em múltiplos níveis.`:'Quote executável ainda não confirmado — não usar esta linha para executar.'} ${best.knownNetworkRestriction?'A rede da CEX está publicamente restrita e a rota foi bloqueada.':(best.transferabilityVerified?'Depósito/saque da rede foi validado publicamente para rebalanceamento.':'Quando a CEX não expõe essa checagem sem autenticação, o radar mantém a rede como não verificada.')} A execução continua em modo read-only.</p>`;
   } else {
     $('dexBest').innerHTML='<h2>—</h2><p>Nenhuma rota DEX ↔ CEX detectada neste ciclo. O radar só aceita contrato exato; ticker sozinho nunca é usado como identidade.</p>';
   }
@@ -190,7 +195,11 @@ function renderDexRadar(data) {
         <td><b class="routeText">${dexVenueLabel(r.buyVenue)} → ${dexVenueLabel(r.sellVenue)}</b><small class="priceLine">DEX: ${r.dex}</small></td>
         <td class="${r.eligible?'pos':''}">${spread>=0?'+':''}${fmt(spread,3)}%</td>
         <td class="${r.eligible?'pos':'neg'}">${confirmed?money(r.netPnlUsdt):'aguardando quote'}</td>
-        <td>${r.sameAssetVerified?(confirmed?'contrato ✓':'contrato ✓ · não executar'):'bloqueado'}</td>
+        <td>${r.sameAssetVerified
+          ? (confirmed
+              ? `contrato ✓ · depth ${r.depthConfirmed?'✓':'—'} · ${r.rebalanceStatus==='verified_open'?'rede ✓':(r.rebalanceStatus==='restricted'?'rede restrita':'rede ?')}`
+              : 'contrato ✓ · não executar')
+          : 'bloqueado'}</td>
       </tr>`;
       }).join('')
     : '<tr><td colspan="5">Nenhuma rota DEX ↔ CEX detectada neste ciclo.</td></tr>';
