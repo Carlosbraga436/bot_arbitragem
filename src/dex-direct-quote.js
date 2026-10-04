@@ -14,15 +14,44 @@ const UNISWAP_V3_QUOTER_V2 = Object.freeze({
   arbitrum: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
   base: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a',
   polygon: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
+  bsc: '0x78D78E420Da98ad378D7799bE8f4AF69033EB077',
 });
 
 const SUSHISWAP_V2_ROUTER = Object.freeze({
   ethereum: '0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F',
   arbitrum: '0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506',
+  polygon: '0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506',
 });
 
 const CAMELOT_V2_ROUTER = Object.freeze({
   arbitrum: '0xc873fEcbd354f5A56E00E710B90EF4201db2448d',
+});
+
+const QUICKSWAP_V2_ROUTER = Object.freeze({
+  polygon: '0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff',
+});
+
+const PANCAKESWAP_V2_ROUTER = Object.freeze({
+  bsc: '0x10ED43C718714eb63d5aA57B78B54704E256024E',
+});
+
+const V2_ROUTE_TOKENS = Object.freeze({
+  ethereum: Object.freeze([
+    '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+    '0xA0b86991c6218b36c1d19d4a2e9Eb0cE3606eB48',
+  ]),
+  arbitrum: Object.freeze([
+    '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
+    '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+  ]),
+  polygon: Object.freeze([
+    '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270',
+    '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+  ]),
+  bsc: Object.freeze([
+    '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c',
+    '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
+  ]),
 });
 
 const UNISWAP_FEE_TIERS = Object.freeze([100, 500, 3000, 10000]);
@@ -67,8 +96,10 @@ export function encodeUniswapQuoteExactInputSingle({ tokenIn, tokenOut, amountIn
   return `0x${UNISWAP_QUOTE_SELECTOR}${addressWord(tokenIn)}${addressWord(tokenOut)}${hexWord(amountIn)}${hexWord(fee)}${hexWord(0)}`;
 }
 
-export function encodeV2GetAmountsOut({ tokenIn, tokenOut, amountIn }) {
-  return `0x${V2_GET_AMOUNTS_OUT_SELECTOR}${hexWord(amountIn)}${hexWord(64)}${hexWord(2)}${addressWord(tokenIn)}${addressWord(tokenOut)}`;
+export function encodeV2GetAmountsOut({ tokenIn, tokenOut, amountIn, path = null }) {
+  const route=Array.isArray(path) && path.length>=2 ? path : [tokenIn,tokenOut];
+  if (route.length<2 || route.length>4) throw new Error('invalid_v2_path');
+  return `0x${V2_GET_AMOUNTS_OUT_SELECTOR}${hexWord(amountIn)}${hexWord(64)}${hexWord(route.length)}${route.map(addressWord).join('')}`;
 }
 
 export function decodeV2AmountsOut(result) {
@@ -99,7 +130,7 @@ async function rpc(chainKey, method, params, timeoutMs = 7_000) {
       signal: controller.signal,
       headers: {
         'content-type': 'application/json',
-        'user-agent': 'radar-cripto-carlos-direct-dex/0.23.0',
+        'user-agent': 'radar-cripto-carlos-direct-dex/0.23.1',
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
@@ -171,20 +202,49 @@ async function quoteUniswapV3({ chainKey, tokenIn, tokenOut, amountIn }) {
   };
 }
 
+function v2PathCandidates(chainKey,tokenIn,tokenOut) {
+  const from=normalizeAddress(tokenIn);
+  const to=normalizeAddress(tokenOut);
+  const paths=[[tokenIn,tokenOut]];
+  for (const mid of V2_ROUTE_TOKENS[chainKey]||[]) {
+    const normalized=normalizeAddress(mid);
+    if (normalized===from || normalized===to) continue;
+    paths.push([tokenIn,mid,tokenOut]);
+  }
+  return paths;
+}
+
 async function quoteV2Router({ chainKey, tokenIn, tokenOut, amountIn, router, adapter, protocol }) {
   if (!router) throw new Error(`${protocol}_v2_not_deployed:${chainKey}`);
-  const data = encodeV2GetAmountsOut({ tokenIn, tokenOut, amountIn });
-  const result = await ethCall(chainKey, router, data);
-  const amounts = decodeV2AmountsOut(result);
-  const amountOut = amounts[amounts.length - 1];
-  if (amountOut <= 0n) throw new Error(`${protocol}_direct_quote_empty`);
+  const attempts=await Promise.allSettled(
+    v2PathCandidates(chainKey,tokenIn,tokenOut).map(async(path)=>{
+      const data=encodeV2GetAmountsOut({amountIn,path});
+      const result=await ethCall(chainKey,router,data);
+      const amounts=decodeV2AmountsOut(result);
+      const amountOut=amounts[amounts.length-1];
+      if (amountOut<=0n) throw new Error(`${protocol}_direct_quote_empty`);
+      return {amountOut,path};
+    }),
+  );
+  const valid=attempts
+    .filter((x)=>x.status==='fulfilled')
+    .map((x)=>x.value)
+    .sort((a,b)=>(a.amountOut===b.amountOut?0:(a.amountOut>b.amountOut?-1:1)));
+  if (!valid.length) {
+    const reasons=attempts
+      .filter((x)=>x.status==='rejected')
+      .map((x)=>x.reason?.message||String(x.reason))
+      .slice(0,3).join('|');
+    throw new Error(`${protocol}_direct_quote_failed:${reasons||'no_route'}`);
+  }
   return {
     adapter,
     protocol,
-    amountOut,
+    amountOut:valid[0].amountOut,
+    path:valid[0].path,
     // Conservative read-only planning estimate. Actual execution gas can vary.
-    gasEstimate: 240_000n,
-    contract: router,
+    gasEstimate:valid[0].path.length>2 ? 320_000n : 240_000n,
+    contract:router,
   };
 }
 
@@ -194,6 +254,8 @@ export function directDexAdapterFor(dexId, chainKey) {
   if (id.includes('uniswap') && UNISWAP_V3_QUOTER_V2[chainKey]) return 'uniswap_v3_quoter';
   if ((id.includes('sushiswap') || id === 'sushi' || id.includes('sushi')) && SUSHISWAP_V2_ROUTER[chainKey]) return 'sushiswap_v2_router';
   if (id.includes('camelot') && CAMELOT_V2_ROUTER[chainKey]) return 'camelot_v2_router';
+  if ((id.includes('quickswap') || id==='quick') && QUICKSWAP_V2_ROUTER[chainKey]) return 'quickswap_v2_router';
+  if ((id.includes('pancakeswap') || id.includes('pancake')) && PANCAKESWAP_V2_ROUTER[chainKey]) return 'pancakeswap_v2_router';
   return null;
 }
 
@@ -234,6 +296,26 @@ export async function directDexQuote({ dexId, chainKey, tokenIn, tokenOut, amoun
       adapter,
       protocol: 'camelot',
     });
+  } else if (adapter === 'quickswap_v2_router') {
+    quote = await quoteV2Router({
+      chainKey,
+      tokenIn,
+      tokenOut,
+      amountIn,
+      router: QUICKSWAP_V2_ROUTER[chainKey],
+      adapter,
+      protocol: 'quickswap',
+    });
+  } else if (adapter === 'pancakeswap_v2_router') {
+    quote = await quoteV2Router({
+      chainKey,
+      tokenIn,
+      tokenOut,
+      amountIn,
+      router: PANCAKESWAP_V2_ROUTER[chainKey],
+      adapter,
+      protocol: 'pancakeswap',
+    });
   } else {
     throw new Error('direct_dex_adapter_not_implemented');
   }
@@ -256,6 +338,8 @@ export function directDexSnapshot() {
       uniswap: Object.keys(UNISWAP_V3_QUOTER_V2),
       sushiswap: Object.keys(SUSHISWAP_V2_ROUTER),
       camelot: Object.keys(CAMELOT_V2_ROUTER),
+      quickswap: Object.keys(QUICKSWAP_V2_ROUTER),
+      pancakeswap: Object.keys(PANCAKESWAP_V2_ROUTER),
     },
     mode: 'read_only_eth_call',
   };
