@@ -70,6 +70,53 @@ async function kucoinNetwork(asset) {
   };
 }
 
+function gateChainEntryMatches(entry, asset) {
+  const aliases=chainAliases(asset);
+  const hay=`${entry?.name||''} ${entry?.chain||''}`.toLowerCase();
+  const aliasMatch=aliases.some((alias)=>hay===alias||hay.includes(alias));
+  const contract=normalizeAddress(entry?.addr||entry?.contract_address);
+  const expected=normalizeAddress(asset?.address);
+  const contractMatch=!contract || contract==='0x' || contract===expected;
+  return aliasMatch && contractMatch;
+}
+
+async function gateNetwork(asset) {
+  const currency=String(asset?.symbol||'').toUpperCase();
+  const data=await fetchJson(`https://api.gateio.ws/api/v4/spot/currencies/${encodeURIComponent(currency)}`);
+  const chains=Array.isArray(data?.chains)?data.chains:[];
+  const entry=chains.find((x)=>gateChainEntryMatches(x,asset));
+
+  if (!entry) {
+    return {
+      exchange:'gate',
+      publicVerificationAvailable:true,
+      networkMatched:false,
+      depositEnabled:false,
+      withdrawEnabled:false,
+      status:'network_not_found',
+      source:'gate_public_spot_currency_api',
+    };
+  }
+
+  const depositEnabled=entry?.deposit_disabled===false;
+  const withdrawEnabled=entry?.withdraw_disabled===false && entry?.withdraw_delayed!==true;
+
+  return {
+    exchange:'gate',
+    publicVerificationAvailable:true,
+    networkMatched:true,
+    depositEnabled,
+    withdrawEnabled,
+    status:depositEnabled && withdrawEnabled
+      ? 'deposit_and_withdraw_enabled'
+      : 'network_restricted',
+    chainName:entry?.name||null,
+    contractAddress:entry?.addr||null,
+    withdrawDelayed:entry?.withdraw_delayed===true,
+    source:'gate_public_spot_currency_api',
+  };
+}
+
 export async function validateCexNetwork(exchange, asset) {
   const ex=String(exchange||'').toLowerCase();
   const chain=chainForAsset(asset);
@@ -78,9 +125,11 @@ export async function validateCexNetwork(exchange, asset) {
   if (cached && Date.now()-cached.fetchedAt<CACHE_MS) return cached.value;
 
   let value;
-  if (ex==='kucoin') {
+  if (ex==='kucoin' || ex==='gate') {
     try {
-      value=await kucoinNetwork(asset);
+      value=ex==='kucoin'
+        ? await kucoinNetwork(asset)
+        : await gateNetwork(asset);
     } catch(error) {
       value={
         exchange:ex,
