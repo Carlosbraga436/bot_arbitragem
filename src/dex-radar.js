@@ -32,6 +32,22 @@ const TOKEN_CACHE_MS = 10 * 60_000;
 const AUTO_REGISTRY_CACHE_MS = 30 * 60_000;
 const QUOTE_CACHE_MS = 120_000;
 const MIN_POOL_LIQUIDITY_USD = 250_000;
+const MIN_POOL_VOLUME_24H_USD = 10_000;
+const TRUSTED_POOL_QUOTES = Object.freeze({
+  ethereum: new Set([
+    '0xdac17f958d2ee523a2206206994597c13d831ec7', // USDT
+    '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', // USDC
+    '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2', // WETH
+    '0x6b175474e89094c44da98b954eedeac495271d0f', // DAI
+  ]),
+  arbitrum: new Set([
+    '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9', // USDT
+    '0xaf88d065e77c8cc2239327c5edb3a432268e5831', // native USDC
+    '0xff970a61a04b1ca14834a43f5de4533ebddb5cc8', // bridged USDC.e
+    '0x82af49447d8a07e3bd95bd0d56f35241523fbab1', // WETH
+    '0xda10009cbd5d07dd0cecc66161fc93d7c9000da1', // DAI
+  ]),
+});
 const MIN_PRELIMINARY_SPREAD_PCT = 0.25;
 const MIN_CONFIRM_SPREAD_PCT = 0.50;
 const MAX_DIRECT_CONFIRMATIONS = 3;
@@ -119,7 +135,7 @@ async function fetchJson(url, timeoutMs = 8_000, retries = 2) {
     try {
       const r = await fetch(url, {
         signal: controller.signal,
-        headers: { 'user-agent':'radar-cripto-carlos-dex/0.22.0' },
+        headers: { 'user-agent':'radar-cripto-carlos-dex/0.22.1' },
       });
 
       if (r.ok) return await r.json();
@@ -301,17 +317,26 @@ function liFiToolForDexId(dexId) {
   }) || null;
 }
 
+export function poolReferenceIsTrusted(pair, asset) {
+  const chainKey=asset?.chain;
+  const trusted=TRUSTED_POOL_QUOTES[chainKey];
+  if (!trusted) return false;
+  const quoteAddress=normalizeAddress(pair?.quoteToken?.address);
+  return Boolean(quoteAddress && trusted.has(quoteAddress));
+}
+
 function poolMatchesAsset(pair, asset) {
   const chain = chainForAsset(asset);
   if (!chain) return false;
   if (!isCuratedDexId(pair?.dexId)) return false;
 
-  // DEX Screener priceUsd refers to the base token. We therefore require the
-  // exact registered token contract to be the base token, but we do NOT require
-  // the pool quote token to be USDT. Executability is confirmed separately by
-  // an exact same-chain USDT <-> token quote.
+  // DEX Screener priceUsd is only a discovery/reference price. Requiring the
+  // exact registered base token is not enough: a junk or stale quote token can
+  // manufacture absurd USD prices even when the base contract is genuine.
+  // Only trusted stable/WETH quote contracts may feed preliminary spreads.
   const baseAddress = normalizeAddress(pair?.baseToken?.address);
-  return baseAddress === normalizeAddress(asset.address);
+  return baseAddress === normalizeAddress(asset.address)
+    && poolReferenceIsTrusted(pair,asset);
 }
 
 function chunks(values,size) {
@@ -348,6 +373,7 @@ async function refreshPools() {
       const eligible = lists
         .filter((pair)=>poolMatchesAsset(pair, asset))
         .filter((pair)=>(finitePositive(pair?.liquidity?.usd) || 0) >= MIN_POOL_LIQUIDITY_USD)
+        .filter((pair)=>(finitePositive(pair?.volume?.h24) || 0) >= MIN_POOL_VOLUME_24H_USD)
         .sort((a,b)=>(Number(b?.liquidity?.usd)||0)-(Number(a?.liquidity?.usd)||0));
 
       if (!eligible.length) continue;
@@ -891,12 +917,16 @@ async function confirmCandidate(candidate, costs) {
     rebalanceRequirements:rebalance.requirements,
     rebalanceVerifiedRequirements:rebalance.verifiedRequirements,
     rebalanceRequirementCount:rebalance.totalRequirements,
-    cexContractVerified:tokenNetwork?.contractVerified===true,
+    cexContractVerified:typeof tokenNetwork?.contractVerified==='boolean'
+      ? tokenNetwork.contractVerified
+      : null,
     cexContractStatus:tokenNetwork?.contractStatus||'not_publicly_verifiable',
     cexIdentityConfidence:tokenNetwork?.contractVerified===true
       ? 'exact_public_contract_match'
       : (tokenNetwork?.contractVerified===false?'contract_mismatch':'manual_mapping_contract_unverified'),
-    quoteContractVerified:quoteNetwork?.contractVerified===true,
+    quoteContractVerified:typeof quoteNetwork?.contractVerified==='boolean'
+      ? quoteNetwork.contractVerified
+      : null,
     quoteContractStatus:quoteNetwork?.contractStatus||'not_publicly_verifiable',
     cexNetwork:tokenNetwork,
     quoteNetwork,
@@ -1049,6 +1079,7 @@ export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
     identityPolicy:'explicit CEX mapping + chainId + exact contract; auto expansion requires Uniswap token list and LI.FI exact-contract agreement; never arbitrary ticker-only',
     transferabilityVerified:false,
     minPoolLiquidityUsd:MIN_POOL_LIQUIDITY_USD,
+    minPoolVolume24hUsd:MIN_POOL_VOLUME_24H_USD,
     registryAssets:assets.length,
     manualRegistryAssets:DEX_ASSET_REGISTRY.length,
     autoVerifiedAssets:state.autoAssets.length,
