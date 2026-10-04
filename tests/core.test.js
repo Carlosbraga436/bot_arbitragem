@@ -4,7 +4,7 @@ import { applyOrderBookMessage, evaluateAcrossExchanges, evaluatePair, evaluateR
 import { DEX_ASSET_REGISTRY, exactIdentityKey, validateRegistry } from '../src/dex-registry.js';
 import { capacitySearchBudgets } from '../src/dex-radar.js';
 import { cexSymbolFormat, depthCapacity } from '../src/cex-depth.js';
-import { transferStatusForRoute } from '../src/cex-network.js';
+import { rebalanceStatusForRoute, transferActionStatus, transferStatusForRoute } from '../src/cex-network.js';
 import { BINANCE_DISCOVERY_STREAM, buildCommonUsdtMarkets, buildMultiExchangeUniverse, chunkTopics, createMarketHub, MAX_MONITORED_SYMBOLS, selectConfirmedSymbols, selectDiscoveredBinanceSymbols } from '../src/market-hub.js';
 
 const now = 1_800_000_000_000;
@@ -558,4 +558,99 @@ test('busca de capacidade DEX sempre desce até o mínimo operacional de 10 USDT
   assert.deepEqual(capacitySearchBudgets(1000),[1000,500,250,100,10]);
   assert.deepEqual(capacitySearchBudgets(25),[25,12.5,10]);
   assert.deepEqual(capacitySearchBudgets(9),[]);
+});
+
+
+test('validação direcional ignora permissão que não é necessária à perna do rebalanceamento', () => {
+  const tokenNetwork={
+    publicVerificationAvailable:true,
+    networkMatched:true,
+    contractVerified:true,
+    depositEnabled:true,
+    withdrawEnabled:false,
+  };
+  const quoteNetwork={
+    publicVerificationAvailable:true,
+    networkMatched:true,
+    contractVerified:true,
+    depositEnabled:false,
+    withdrawEnabled:true,
+  };
+
+  const dexToCex=rebalanceStatusForRoute({
+    direction:'dex_to_cex',
+    tokenNetwork,
+    quoteNetwork,
+  });
+
+  assert.equal(transferActionStatus(tokenNetwork,'deposit'),'verified_open');
+  assert.equal(transferActionStatus(tokenNetwork,'withdraw'),'restricted');
+  assert.equal(dexToCex.status,'verified_open');
+  assert.equal(dexToCex.verifiedRequirements,2);
+  assert.deepEqual(
+    dexToCex.requirements.map((x)=>[x.key,x.action,x.status]),
+    [
+      ['token_to_cex','deposit','verified_open'],
+      ['usdt_to_chain','withdraw','verified_open'],
+    ],
+  );
+});
+
+test('rebalance CEX para DEX exige saque do token e depósito de USDT', () => {
+  const tokenNetwork={
+    publicVerificationAvailable:true,
+    networkMatched:true,
+    contractVerified:true,
+    depositEnabled:false,
+    withdrawEnabled:true,
+  };
+  const quoteNetwork={
+    publicVerificationAvailable:true,
+    networkMatched:true,
+    contractVerified:true,
+    depositEnabled:true,
+    withdrawEnabled:false,
+  };
+
+  const cexToDex=rebalanceStatusForRoute({
+    direction:'cex_to_dex',
+    tokenNetwork,
+    quoteNetwork,
+  });
+
+  assert.equal(cexToDex.status,'verified_open');
+  assert.equal(cexToDex.verifiedRequirements,2);
+  assert.deepEqual(
+    cexToDex.requirements.map((x)=>[x.key,x.action,x.status]),
+    [
+      ['token_to_chain','withdraw','verified_open'],
+      ['usdt_to_cex','deposit','verified_open'],
+    ],
+  );
+});
+
+test('restrição conhecida na perna de USDT bloqueia o rebalanceamento', () => {
+  const tokenNetwork={
+    publicVerificationAvailable:true,
+    networkMatched:true,
+    contractVerified:true,
+    depositEnabled:true,
+    withdrawEnabled:true,
+  };
+  const quoteNetwork={
+    publicVerificationAvailable:true,
+    networkMatched:true,
+    contractVerified:true,
+    depositEnabled:true,
+    withdrawEnabled:false,
+  };
+
+  const result=rebalanceStatusForRoute({
+    direction:'dex_to_cex',
+    tokenNetwork,
+    quoteNetwork,
+  });
+
+  assert.equal(result.status,'restricted');
+  assert.equal(result.requirements.find((x)=>x.key==='usdt_to_chain')?.status,'restricted');
 });
