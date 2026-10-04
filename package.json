@@ -1,13 +1,13 @@
 {
   "name": "radar-cripto-carlos",
-  "version": "0.21.2-recovery.1",
+  "version": "0.22.0-recovery.1",
   "private": true,
   "type": "module",
-  "description": "Radar Cripto CEX + DEX same-chain com contrato exato, profundidade CEX, capacidade máxima lucrativa e validação direcional de rebalanceamento token+USDT. Somente leitura/simulação.",
+  "description": "Radar Cripto CEX + DEX same-chain com quote direto read-only, expansão automática por contrato exato em duas fontes, depth CEX, funil diagnóstico e rebalanceamento token+USDT. Somente leitura/simulação.",
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
-    "check": "node --check server.js && node --check src/core.js && node --check src/market-hub.js && node --check src/dex-registry.js && node --check src/cex-depth.js && node --check src/cex-network.js && node --check src/dex-radar.js && node --check public/app.js && node --check scripts/diagnose-live.js",
+    "check": "node --check server.js && node --check src/core.js && node --check src/market-hub.js && node --check src/dex-registry.js && node --check src/dex-direct-quote.js && node --check src/cex-depth.js && node --check src/cex-network.js && node --check src/dex-radar.js && node --check public/app.js && node --check scripts/diagnose-live.js",
     "diagnose": "node scripts/diagnose-live.js"
   },
   "engines": {
