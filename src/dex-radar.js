@@ -22,6 +22,14 @@ const MIN_POOL_LIQUIDITY_USD = 250_000;
 const MIN_PRELIMINARY_SPREAD_PCT = 0.25;
 const MAX_CONFIRMED_CANDIDATES = 6;
 const LIFI_SLIPPAGE = 0.005;
+const LIFI_TOOL_FALLBACK = Object.freeze([
+  'uniswap',
+  'sushiswap',
+  'curve',
+  'balancer',
+  'pancakeswap',
+  'camelot',
+]);
 
 const state = {
   poolsByIdentity: new Map(),
@@ -72,19 +80,43 @@ function unitsToNumber(value, decimals) {
   }
 }
 
-async function fetchJson(url, timeoutMs = 8_000) {
-  const controller = new AbortController();
-  const timeout = setTimeout(()=>controller.abort(), timeoutMs);
-  try {
-    const r = await fetch(url, {
-      signal: controller.signal,
-      headers: { 'user-agent':'radar-cripto-carlos-dex/0.1' },
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return await r.json();
-  } finally {
-    clearTimeout(timeout);
+function sleep(ms) {
+  return new Promise((resolve)=>setTimeout(resolve,ms));
+}
+
+async function fetchJson(url, timeoutMs = 8_000, retries = 2) {
+  let lastError = null;
+
+  for (let attempt=0; attempt<=retries; attempt+=1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(()=>controller.abort(), timeoutMs);
+    try {
+      const r = await fetch(url, {
+        signal: controller.signal,
+        headers: { 'user-agent':'radar-cripto-carlos-dex/0.20' },
+      });
+
+      if (r.ok) return await r.json();
+
+      const retryAfterHeader = Number(r.headers.get('retry-after'));
+      const retryable = r.status === 429 || r.status >= 500;
+      const retryAfterMs = Number.isFinite(retryAfterHeader) && retryAfterHeader > 0
+        ? retryAfterHeader * 1000
+        : Math.min(8_000, 1_000 * (2 ** attempt));
+      lastError = new Error(`${new URL(url).hostname} HTTP ${r.status}`);
+
+      if (!retryable || attempt >= retries) throw lastError;
+      await sleep(retryAfterMs);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= retries || error?.name === 'AbortError') throw error;
+      await sleep(Math.min(8_000,1_000*(2**attempt)));
+    } finally {
+      clearTimeout(timeout);
+    }
   }
+
+  throw lastError || new Error('fetch_failed');
 }
 
 function screeningStatus(token) {
@@ -108,25 +140,41 @@ async function refreshTokenMetadata() {
   if (Date.now() - state.tokensFetchedAt < TOKEN_CACHE_MS && state.tokenMetaByIdentity.size) return;
   const chainIds = [...new Set(DEX_ASSET_REGISTRY.map((asset)=>chainForAsset(asset)?.chainId).filter(Boolean))];
   const url = `${LIFI_BASE}/tokens?chains=${chainIds.join(',')}`;
-  const data = await fetchJson(url);
-  const byChain = data?.tokens || {};
   const next = new Map();
 
-  for (const asset of DEX_ASSET_REGISTRY) {
-    const chain = chainForAsset(asset);
-    const tokens = byChain?.[String(chain.chainId)] || [];
-    const exact = tokens.find((token)=>
-      normalizeAddress(token?.address) === normalizeAddress(asset.address)
-      && Number(token?.chainId) === chain.chainId
-    );
-    if (!exact) continue;
-    next.set(exactIdentityKey(asset), {
-      address: exact.address,
-      symbol: exact.symbol,
-      chainId: Number(exact.chainId),
-      coinKey: exact.coinKey || null,
-      screeningStatus: screeningStatus(exact),
-    });
+  try {
+    const data = await fetchJson(url,10_000,2);
+    const byChain = data?.tokens || {};
+
+    for (const asset of DEX_ASSET_REGISTRY) {
+      const chain = chainForAsset(asset);
+      const tokens = byChain?.[String(chain.chainId)] || [];
+      const exact = tokens.find((token)=>
+        normalizeAddress(token?.address) === normalizeAddress(asset.address)
+        && Number(token?.chainId) === chain.chainId
+      );
+      if (!exact) continue;
+      next.set(exactIdentityKey(asset), {
+        address: exact.address,
+        symbol: exact.symbol,
+        chainId: Number(exact.chainId),
+        coinKey: exact.coinKey || null,
+        screeningStatus: screeningStatus(exact),
+        screeningSource: 'lifi',
+      });
+    }
+  } catch (error) {
+    for (const asset of DEX_ASSET_REGISTRY) {
+      const chain = chainForAsset(asset);
+      next.set(exactIdentityKey(asset), {
+        address: asset.address,
+        symbol: asset.symbol,
+        chainId: chain.chainId,
+        coinKey: asset.canonicalId,
+        screeningStatus: 'unknown',
+        screeningSource: `manual_registry_fallback:${error?.message || error}`,
+      });
+    }
   }
 
   state.tokenMetaByIdentity = next;
@@ -135,15 +183,22 @@ async function refreshTokenMetadata() {
 
 async function refreshTools() {
   if (Date.now() - state.toolsFetchedAt < TOOL_CACHE_MS && state.toolKeys.length) return;
-  const data = await fetchJson(`${LIFI_BASE}/tools`);
-  const exchanges = Array.isArray(data?.exchanges) ? data.exchanges : [];
-  state.toolKeys = exchanges
-    .filter((tool)=>{
-      const hay = `${tool?.key || ''} ${tool?.name || ''}`.toLowerCase();
-      return CURATED_DEX_ID_ALIASES.some((alias)=>hay.includes(alias));
-    })
-    .map((tool)=>tool.key)
-    .filter(Boolean);
+
+  try {
+    const data = await fetchJson(`${LIFI_BASE}/tools`,10_000,2);
+    const exchanges = Array.isArray(data?.exchanges) ? data.exchanges : [];
+    state.toolKeys = exchanges
+      .filter((tool)=>{
+        const hay = `${tool?.key || ''} ${tool?.name || ''}`.toLowerCase();
+        return CURATED_DEX_ID_ALIASES.some((alias)=>hay.includes(alias));
+      })
+      .map((tool)=>tool.key)
+      .filter(Boolean);
+  } catch {
+    state.toolKeys = [...LIFI_TOOL_FALLBACK];
+  }
+
+  if (!state.toolKeys.length) state.toolKeys = [...LIFI_TOOL_FALLBACK];
   state.toolsFetchedAt = Date.now();
 }
 
@@ -171,8 +226,9 @@ async function refreshPools() {
     if (!chain) continue;
 
     const url = `${DEXSCREENER_BASE}/token-pairs/v1/${chain.dexScreenerChain}/${asset.address}`;
-    const pairs = await fetchJson(url);
+    const pairs = await fetchJson(url,10_000,3);
     const list = Array.isArray(pairs) ? pairs : [];
+    await sleep(250);
 
     const eligible = list
       .filter((pair)=>poolMatchesAsset(pair, asset))
@@ -265,7 +321,7 @@ async function lifiQuote({asset, direction, amountUnits}) {
     order: 'RECOMMENDED',
     allowExchanges: state.toolKeys.join(','),
   });
-  const quote = await fetchJson(`${LIFI_BASE}/quote?${params.toString()}`, 12_000);
+  const quote = await fetchJson(`${LIFI_BASE}/quote?${params.toString()}`, 12_000, 3);
   state.quoteCache.set(key,{quote,fetchedAt:Date.now()});
   return quote;
 }
@@ -425,6 +481,7 @@ export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
       const costs = costsForSymbol(candidate.asset.cexSymbol);
       const result = await confirmCandidate(candidate,costs);
       if (result) confirmed.push(result);
+      await sleep(350);
     } catch (error) {
       confirmed.push({
         eligible:false,
@@ -483,6 +540,7 @@ export function dexRegistrySnapshot() {
       quoteContract:chain?.quoteAddress,
       identityKey:exactIdentityKey(asset),
       screeningStatus:state.tokenMetaByIdentity.get(exactIdentityKey(asset))?.screeningStatus || 'unknown',
+      screeningSource:state.tokenMetaByIdentity.get(exactIdentityKey(asset))?.screeningSource || 'not_loaded',
       pool:state.poolsByIdentity.get(exactIdentityKey(asset)) || null,
     };
   });
