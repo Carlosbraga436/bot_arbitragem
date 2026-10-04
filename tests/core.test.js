@@ -210,14 +210,22 @@ test('universo multiexchange une pares USDT ativos sem duplicar símbolo', () =>
   assert.equal(btc.venues.gate,true);
 });
 
-test('market hub seguro expõe as cinco exchanges antes de iniciar', () => {
-  const hub = createMarketHub({ symbols:['BTCUSDT'], gateSymbols:['BTCUSDT'], logger:{info(){},warn(){}} });
+test('market hub seguro expõe as sete exchanges antes de iniciar', () => {
+  const hub = createMarketHub({
+    symbols:['BTCUSDT'],
+    gateSymbols:['BTCUSDT'],
+    bitgetSymbols:['BTCUSDT'],
+    htxSymbols:['BTCUSDT'],
+    logger:{info(){},warn(){}},
+  });
   const snap = hub.snapshot();
-  assert.deepEqual(Object.keys(snap.status), ['binance','bybit','okx','gate','kucoin']);
-  assert.deepEqual(Object.keys(snap.books), ['binance','bybit','okx','gate','kucoin']);
+  assert.deepEqual(Object.keys(snap.status), ['binance','bybit','okx','gate','kucoin','bitget','htx']);
+  assert.deepEqual(Object.keys(snap.books), ['binance','bybit','okx','gate','kucoin','bitget','htx']);
   assert.equal(snap.status.okx.state,'idle');
   assert.equal(snap.status.gate.state,'idle');
   assert.equal(snap.status.kucoin.state,'idle');
+  assert.equal(snap.status.bitget.state,'idle');
+  assert.equal(snap.status.htx.state,'idle');
 });
 
 
