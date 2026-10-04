@@ -4,11 +4,16 @@ const GAS_PRICE_CACHE_MS = 15_000;
 const RPC_ENDPOINTS = Object.freeze({
   ethereum: process.env.ETHEREUM_RPC_URL || 'https://ethereum-rpc.publicnode.com',
   arbitrum: process.env.ARBITRUM_RPC_URL || 'https://arb1.arbitrum.io/rpc',
+  base: process.env.BASE_RPC_URL || 'https://mainnet.base.org',
+  polygon: process.env.POLYGON_RPC_URL || 'https://polygon-bor-rpc.publicnode.com',
+  bsc: process.env.BSC_RPC_URL || 'https://bsc-rpc.publicnode.com',
 });
 
 const UNISWAP_V3_QUOTER_V2 = Object.freeze({
   ethereum: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
   arbitrum: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
+  base: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a',
+  polygon: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
 });
 
 const SUSHISWAP_V2_ROUTER = Object.freeze({
@@ -94,7 +99,7 @@ async function rpc(chainKey, method, params, timeoutMs = 7_000) {
       signal: controller.signal,
       headers: {
         'content-type': 'application/json',
-        'user-agent': 'radar-cripto-carlos-direct-dex/0.22.1',
+        'user-agent': 'radar-cripto-carlos-direct-dex/0.23.0',
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
