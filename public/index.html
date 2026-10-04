@@ -45,8 +45,8 @@
 
     <section class="card">
       <div class="sectionHead"><div><h2 id="dexTableTitle">DEX ↔ CEX</h2><p id="dexSummary">Validando contratos exatos…</p></div><div class="badge">CONTRATO + CHAIN ✓</div></div>
-      <div class="costs">DEXs permitidas nesta fase: Uniswap, SushiSwap, Curve, Balancer, PancakeSwap e Camelot, quando disponíveis pela LI.FI. Ethereum e Arbitrum apenas. O token nunca é casado somente por ticker: usamos chainId + endereço exato do contrato + mapeamento explícito para o ativo da CEX. Pools abaixo de US$ 250 mil de liquidez ficam fora. Token marcado como Denied no screening da LI.FI fica bloqueado.</div>
-      <div class="tableWrap"><table><thead><tr><th>Ativo</th><th>Direção</th><th>Spread</th><th>Líquido</th><th>Identidade</th></tr></thead><tbody id="dexRows"><tr><td colspan="5">Aguardando…</td></tr></tbody></table></div>
+      <div class="costs">DEXs permitidas nesta fase: Uniswap, SushiSwap, Curve, Balancer, PancakeSwap e Camelot, quando disponíveis pela LI.FI. Ethereum e Arbitrum apenas. O token nunca é casado somente por ticker: usamos chainId + endereço exato do contrato + mapeamento explícito para o ativo da CEX. Pools abaixo de US$ 250 mil de liquidez ficam fora. Token marcado como Denied no screening da LI.FI fica bloqueado. Candidatas recebem confirmação com até 100 níveis do order book da CEX, busca do maior ticket lucrativo até o teto selecionado e checagem pública de rede quando a exchange expõe essa informação.</div>
+      <div class="tableWrap"><table><thead><tr><th>Ativo</th><th>Direção</th><th>Spread</th><th>Líquido</th><th>Validação</th></tr></thead><tbody id="dexRows"><tr><td colspan="5">Aguardando…</td></tr></tbody></table></div>
     </section>
 
     <footer>Sem depósito · sem API key · sem envio de ordens · 5 CEXs + DEX beta · universo USDT dinâmico · O valor selecionado é um teto, não uma obrigação de usar tudo. O radar mantém oportunidades parcialmente executáveis e informa quanto cabe no book visível. Top 5 exige lucro líquido da execução após taxas + reserva; recomposição é cenário separado.</footer>
