@@ -17,10 +17,11 @@ const READ_ONLY_ADDRESS = '0x0000000000000000000000000000000000000001';
 const POOL_CACHE_MS = 30_000;
 const TOOL_CACHE_MS = 10 * 60_000;
 const TOKEN_CACHE_MS = 10 * 60_000;
-const QUOTE_CACHE_MS = 20_000;
+const QUOTE_CACHE_MS = 120_000;
 const MIN_POOL_LIQUIDITY_USD = 250_000;
 const MIN_PRELIMINARY_SPREAD_PCT = 0.25;
-const MAX_CONFIRMED_CANDIDATES = 2;
+const MAX_CONFIRMED_CANDIDATES = 1;
+const MIN_CONFIRM_SPREAD_PCT = 0.50;
 const LIFI_SLIPPAGE = 0.005;
 const LIFI_TOOL_FALLBACK = Object.freeze([
   'uniswap',
@@ -206,6 +207,15 @@ function poolIdentity(asset) {
   return exactIdentityKey(asset);
 }
 
+function liFiToolForDexId(dexId) {
+  const id=String(dexId||'').toLowerCase();
+  if (!id) return null;
+  return state.toolKeys.find((tool)=>{
+    const key=String(tool||'').toLowerCase();
+    return key===id || key.includes(id) || id.includes(key);
+  }) || null;
+}
+
 function poolMatchesAsset(pair, asset) {
   const chain = chainForAsset(asset);
   if (!chain) return false;
@@ -246,7 +256,9 @@ async function refreshPools() {
         .sort((a,b)=>(Number(b?.liquidity?.usd)||0)-(Number(a?.liquidity?.usd)||0));
 
       if (!eligible.length) continue;
-      const pair = eligible[0];
+      const confirmable = eligible.filter((pair)=>liFiToolForDexId(pair?.dexId));
+      const pair = confirmable[0] || eligible[0];
+      const lifiToolKey = liFiToolForDexId(pair?.dexId);
       next.set(poolIdentity(asset), {
         chain: chainKey,
         chainId: chain.chainId,
@@ -254,6 +266,7 @@ async function refreshPools() {
         tokenAddress: asset.address,
         quoteAddress: chain.quoteAddress,
         dexId: pair.dexId,
+        lifiToolKey,
         pairAddress: pair.pairAddress,
         priceUsd: finitePositive(pair.priceUsd),
         liquidityUsd: finitePositive(pair?.liquidity?.usd),
@@ -335,11 +348,12 @@ function curatedQuoteTool(quote) {
   return candidates.find((tool)=>isCuratedDexId(tool)) || null;
 }
 
-async function lifiQuote({asset, direction, amountUnits}) {
+async function lifiQuote({asset, direction, amountUnits, allowedExchange}) {
+  if (!allowedExchange) throw new Error('dex_not_supported_for_executable_quote');
   const chain = chainForAsset(asset);
   const fromToken = direction === 'dex_to_cex' ? chain.quoteAddress : asset.address;
   const toToken = direction === 'dex_to_cex' ? asset.address : chain.quoteAddress;
-  const key = [chain.chainId,normalizeAddress(fromToken),normalizeAddress(toToken),String(amountUnits)].join(':');
+  const key = [chain.chainId,normalizeAddress(fromToken),normalizeAddress(toToken),String(amountUnits),allowedExchange].join(':');
   const cached = state.quoteCache.get(key);
   if (cached && Date.now()-cached.fetchedAt < QUOTE_CACHE_MS) return cached.quote;
 
@@ -353,16 +367,14 @@ async function lifiQuote({asset, direction, amountUnits}) {
     fromAmount: String(amountUnits),
     slippage: String(LIFI_SLIPPAGE),
     order: 'RECOMMENDED',
+    allowExchanges: allowedExchange,
+    allowBridges: 'none',
   });
 
   const quote = await fetchJson(`${LIFI_BASE}/quote?${params.toString()}`, 7_000, 1);
-  const tool = curatedQuoteTool(quote);
-  if (!tool) {
-    const seen = quoteToolCandidates(quote).join(',') || 'unknown';
-    throw new Error(`uncurated_lifi_route:${seen}`);
-  }
-
-  quote.__curatedDexTool = tool;
+  // LI.FI's allowExchanges parameter constrains the swap venue. We still verify
+  // chain and exact token contracts separately via quoteIdentityMatches.
+  quote.__curatedDexTool = allowedExchange;
   state.quoteCache.set(key,{quote,fetchedAt:Date.now()});
   return quote;
 }
@@ -392,8 +404,7 @@ function preliminaryCandidates(snapshot, budgetUsdt) {
   }
 
   return candidates
-    .sort((a,b)=>b.preliminarySpreadPct-a.preliminarySpreadPct)
-    .slice(0,MAX_CONFIRMED_CANDIDATES);
+    .sort((a,b)=>b.preliminarySpreadPct-a.preliminarySpreadPct);
 }
 
 async function confirmCandidate(candidate, costs) {
@@ -404,7 +415,7 @@ async function confirmCandidate(candidate, costs) {
   if (direction === 'dex_to_cex') {
     const budgetUnits = numberToUnits(budgetUsdt, chain.quoteDecimals);
     if (!budgetUnits) return null;
-    const quote = await lifiQuote({asset,direction,amountUnits:budgetUnits});
+    const quote = await lifiQuote({asset,direction,amountUnits:budgetUnits,allowedExchange:pool.lifiToolKey});
     if (!quoteIdentityMatches(quote,asset,direction)) return null;
 
     const tokenOutMin = unitsToNumber(quote?.estimate?.toAmountMin, asset.decimals);
@@ -461,7 +472,7 @@ async function confirmCandidate(candidate, costs) {
   if (!bought?.filled || !bought.baseQty) return null;
   const tokenUnits = numberToUnits(bought.baseQty, asset.decimals);
   if (!tokenUnits) return null;
-  const quote = await lifiQuote({asset,direction,amountUnits:tokenUnits});
+  const quote = await lifiQuote({asset,direction,amountUnits:tokenUnits,allowedExchange:pool.lifiToolKey});
   if (!quoteIdentityMatches(quote,asset,direction)) return null;
 
   const stableOutMin = unitsToNumber(quote?.estimate?.toAmountMin, chain.quoteDecimals);
@@ -513,11 +524,16 @@ async function confirmCandidate(candidate, costs) {
 
 export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
   validateRegistry();
+  await refreshTools().catch(()=>{});
   await Promise.all([refreshPools(),refreshTokenMetadata()]);
   const preliminary = preliminaryCandidates(snapshot,budgetUsdt);
+  const toConfirm = preliminary
+    .filter((candidate)=>candidate.preliminarySpreadPct>=MIN_CONFIRM_SPREAD_PCT)
+    .filter((candidate)=>Boolean(candidate.pool?.lifiToolKey))
+    .slice(0,MAX_CONFIRMED_CANDIDATES);
   const confirmed = [];
 
-  for (const candidate of preliminary) {
+  for (const candidate of toConfirm) {
     try {
       const costs = costsForSymbol(candidate.asset.cexSymbol);
       const result = await confirmCandidate(candidate,costs);
@@ -581,6 +597,7 @@ export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
     registryAssets:DEX_ASSET_REGISTRY.length,
     poolsFound:state.poolsByIdentity.size,
     lifiDexTools:state.toolKeys.length ? state.toolKeys : LIFI_TOOL_FALLBACK,
+    executableDexes:[...new Set([...state.poolsByIdentity.values()].map((pool)=>pool.lifiToolKey).filter(Boolean))],
     preliminaryCount:preliminary.length,
     preliminaryTop5,
     confirmedCount:valid.length,
