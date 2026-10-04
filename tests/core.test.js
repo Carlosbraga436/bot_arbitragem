@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyOrderBookMessage, evaluateAcrossExchanges, evaluatePair, evaluateRoute, topPositive } from '../src/core.js';
+import { DEX_ASSET_REGISTRY, exactIdentityKey, validateRegistry } from '../src/dex-registry.js';
 import { BINANCE_DISCOVERY_STREAM, buildCommonUsdtMarkets, buildMultiExchangeUniverse, chunkTopics, createMarketHub, MAX_MONITORED_SYMBOLS, selectConfirmedSymbols, selectDiscoveredBinanceSymbols } from '../src/market-hub.js';
 
 const now = 1_800_000_000_000;
@@ -455,4 +456,25 @@ test('modo exato antigo continua disponível para regressão', () => {
   });
   assert.equal(r.eligible,false);
   assert.equal(r.reason,'insufficient_buy_liquidity');
+});
+
+
+test('registro DEX usa chainId + contrato + CEX symbol, nunca ticker isolado', () => {
+  assert.equal(validateRegistry(),true);
+  const ethLink=DEX_ASSET_REGISTRY.find((x)=>x.cexSymbol==='LINKUSDT' && x.chain==='ethereum');
+  const arbLink=DEX_ASSET_REGISTRY.find((x)=>x.cexSymbol==='LINKUSDT' && x.chain==='arbitrum');
+  assert.ok(ethLink);
+  assert.ok(arbLink);
+  assert.notEqual(exactIdentityKey(ethLink),exactIdentityKey(arbLink));
+  assert.match(exactIdentityKey(ethLink),/^1:0x[0-9a-f]{40}:LINKUSDT$/);
+  assert.match(exactIdentityKey(arbLink),/^42161:0x[0-9a-f]{40}:LINKUSDT$/);
+});
+
+test('registro DEX contém apenas contratos EVM explícitos e sem duplicata de identidade', () => {
+  const keys=DEX_ASSET_REGISTRY.map(exactIdentityKey);
+  assert.equal(new Set(keys).size,keys.length);
+  for (const asset of DEX_ASSET_REGISTRY) {
+    assert.match(asset.address,/^0x[0-9a-fA-F]{40}$/);
+    assert.ok(asset.cexSymbol.endsWith('USDT'));
+  }
 });
