@@ -2,33 +2,48 @@ import { consumeBase, consumeQuote, exchangeFeePct } from './core.js';
 import { depthCapacity, fetchCexDepth } from './cex-depth.js';
 import { validateCexRebalance } from './cex-network.js';
 import {
+  applyDirectSlippage,
+  directDexAdapterFor,
+  directDexQuote,
+  directDexSnapshot,
+} from './dex-direct-quote.js';
+import {
+  AUTO_ASSET_ALLOWLIST,
   CURATED_DEX_NAMES,
   CURATED_DEX_ID_ALIASES,
   DEX_ASSET_REGISTRY,
+  buildAutoAssetRegistry,
   chainForAsset,
   exactIdentityKey,
   isCuratedDexId,
+  mergeAssetRegistries,
   normalizeAddress,
   validateRegistry,
 } from './dex-registry.js';
 
 const DEXSCREENER_BASE = 'https://api.dexscreener.com';
 const LIFI_BASE = 'https://li.quest/v1';
+const UNISWAP_TOKEN_LIST = 'https://tokens.uniswap.org';
 const READ_ONLY_ADDRESS = '0x0000000000000000000000000000000000000001';
 
 const POOL_CACHE_MS = 30_000;
 const TOOL_CACHE_MS = 10 * 60_000;
 const TOKEN_CACHE_MS = 10 * 60_000;
+const AUTO_REGISTRY_CACHE_MS = 30 * 60_000;
 const QUOTE_CACHE_MS = 120_000;
 const MIN_POOL_LIQUIDITY_USD = 250_000;
 const MIN_PRELIMINARY_SPREAD_PCT = 0.25;
-const MAX_CONFIRMED_CANDIDATES = 1;
 const MIN_CONFIRM_SPREAD_PCT = 0.50;
+const MAX_DIRECT_CONFIRMATIONS = 3;
+const MAX_FALLBACK_CONFIRMATIONS = 1;
+const DEXSCREENER_BATCH_SIZE = 25;
 const LIFI_SLIPPAGE = 0.005;
+const DIRECT_SLIPPAGE_BPS = 50;
 const MIN_EXECUTION_USDT = 10;
 const CAPACITY_SEARCH_STEPS = Object.freeze([1,0.50,0.25,0.10]);
 const CAPACITY_BINARY_STEPS = 2;
 const LIFI_QUOTE_DELAY_MS = 1_100;
+const DIRECT_QUOTE_DELAY_MS = 120;
 const LIFI_TOOL_FALLBACK = Object.freeze([
   'uniswap',
   'sushiswap',
@@ -46,6 +61,10 @@ const state = {
   tokenMetaByIdentity: new Map(),
   tokensFetchedAt: 0,
   quoteCache: new Map(),
+  autoAssets: [],
+  autoRegistryFetchedAt: 0,
+  lifiTokenPayload: null,
+  lifiTokenFetchedAt: 0,
 };
 
 function finitePositive(value) {
@@ -100,7 +119,7 @@ async function fetchJson(url, timeoutMs = 8_000, retries = 2) {
     try {
       const r = await fetch(url, {
         signal: controller.signal,
-        headers: { 'user-agent':'radar-cripto-carlos-dex/0.21.2' },
+        headers: { 'user-agent':'radar-cripto-carlos-dex/0.22.0' },
       });
 
       if (r.ok) return await r.json();
@@ -143,17 +162,53 @@ function screeningAllowed(status) {
   return status !== 'denied';
 }
 
+function effectiveAssets() {
+  return mergeAssetRegistries(DEX_ASSET_REGISTRY,state.autoAssets);
+}
+
+function flattenLifiTokens(payload) {
+  const byChain=payload?.tokens || {};
+  return Object.values(byChain).flatMap((tokens)=>Array.isArray(tokens)?tokens:[]);
+}
+
+async function getLifiTokenPayload() {
+  if (state.lifiTokenPayload && Date.now()-state.lifiTokenFetchedAt<TOKEN_CACHE_MS) return state.lifiTokenPayload;
+  const chainIds=[...new Set(Object.values(DEX_ASSET_REGISTRY).map((asset)=>chainForAsset(asset)?.chainId).filter(Boolean))];
+  const url=`${LIFI_BASE}/tokens?chains=${chainIds.join(',')}`;
+  const payload=await fetchJson(url,10_000,2);
+  state.lifiTokenPayload=payload;
+  state.lifiTokenFetchedAt=Date.now();
+  return payload;
+}
+
+async function refreshAutoRegistry() {
+  if (Date.now()-state.autoRegistryFetchedAt<AUTO_REGISTRY_CACHE_MS && state.autoAssets.length) return;
+  try {
+    const [uniswapList,lifiPayload]=await Promise.all([
+      fetchJson(UNISWAP_TOKEN_LIST,10_000,2),
+      getLifiTokenPayload(),
+    ]);
+    state.autoAssets=buildAutoAssetRegistry({
+      uniswapTokens:Array.isArray(uniswapList?.tokens)?uniswapList.tokens:[],
+      lifiTokens:flattenLifiTokens(lifiPayload),
+      allowlist:AUTO_ASSET_ALLOWLIST,
+    });
+  } catch {
+    state.autoAssets=[];
+  }
+  state.autoRegistryFetchedAt=Date.now();
+}
+
 async function refreshTokenMetadata() {
   if (Date.now() - state.tokensFetchedAt < TOKEN_CACHE_MS && state.tokenMetaByIdentity.size) return;
-  const chainIds = [...new Set(DEX_ASSET_REGISTRY.map((asset)=>chainForAsset(asset)?.chainId).filter(Boolean))];
-  const url = `${LIFI_BASE}/tokens?chains=${chainIds.join(',')}`;
+  const assets=effectiveAssets();
   const next = new Map();
 
   try {
-    const data = await fetchJson(url,10_000,2);
+    const data = await getLifiTokenPayload();
     const byChain = data?.tokens || {};
 
-    for (const asset of DEX_ASSET_REGISTRY) {
+    for (const asset of assets) {
       const chain = chainForAsset(asset);
       const tokens = byChain?.[String(chain.chainId)] || [];
       const exact = tokens.find((token)=>
@@ -167,11 +222,11 @@ async function refreshTokenMetadata() {
         chainId: Number(exact.chainId),
         coinKey: exact.coinKey || null,
         screeningStatus: screeningStatus(exact),
-        screeningSource: 'lifi',
+        screeningSource: 'lifi_exact_contract',
       });
     }
   } catch (error) {
-    for (const asset of DEX_ASSET_REGISTRY) {
+    for (const asset of assets) {
       const chain = chainForAsset(asset);
       next.set(exactIdentityKey(asset), {
         address: asset.address,
@@ -179,9 +234,23 @@ async function refreshTokenMetadata() {
         chainId: chain.chainId,
         coinKey: asset.canonicalId,
         screeningStatus: 'unknown',
-        screeningSource: `manual_registry_fallback:${error?.message || error}`,
+        screeningSource: `${asset.identitySource||'exact_registry'}_fallback:${error?.message || error}`,
       });
     }
+  }
+
+  for (const asset of assets) {
+    const key=exactIdentityKey(asset);
+    if (next.has(key)) continue;
+    const chain=chainForAsset(asset);
+    next.set(key,{
+      address:asset.address,
+      symbol:asset.symbol,
+      chainId:chain.chainId,
+      coinKey:asset.canonicalId,
+      screeningStatus:'unknown',
+      screeningSource:asset.identitySource||'exact_registry',
+    });
   }
 
   state.tokenMetaByIdentity = next;
@@ -245,13 +314,19 @@ function poolMatchesAsset(pair, asset) {
   return baseAddress === normalizeAddress(asset.address);
 }
 
+function chunks(values,size) {
+  const out=[];
+  for (let i=0;i<values.length;i+=size) out.push(values.slice(i,i+size));
+  return out;
+}
+
 async function refreshPools() {
   if (Date.now() - state.poolFetchedAt < POOL_CACHE_MS && state.poolsByIdentity.size) return;
 
   const next = new Map();
   const byChain = new Map();
 
-  for (const asset of DEX_ASSET_REGISTRY) {
+  for (const asset of effectiveAssets()) {
     const chain = chainForAsset(asset);
     if (!chain) continue;
     if (!byChain.has(asset.chain)) byChain.set(asset.chain,[]);
@@ -260,21 +335,28 @@ async function refreshPools() {
 
   for (const [chainKey,assets] of byChain.entries()) {
     const chain = chainForAsset(assets[0]);
-    const tokenAddresses = assets.map((asset)=>asset.address).join(',');
-    const url = `${DEXSCREENER_BASE}/tokens/v1/${chain.dexScreenerChain}/${tokenAddresses}`;
-    const pairs = await fetchJson(url,10_000,3);
-    const list = Array.isArray(pairs) ? pairs : [];
+    const lists=[];
+    for (const batch of chunks(assets,DEXSCREENER_BATCH_SIZE)) {
+      const tokenAddresses=[...new Set(batch.map((asset)=>asset.address))].join(',');
+      const url=`${DEXSCREENER_BASE}/tokens/v1/${chain.dexScreenerChain}/${tokenAddresses}`;
+      const pairs=await fetchJson(url,10_000,3);
+      if (Array.isArray(pairs)) lists.push(...pairs);
+      await sleep(180);
+    }
 
     for (const asset of assets) {
-      const eligible = list
+      const eligible = lists
         .filter((pair)=>poolMatchesAsset(pair, asset))
         .filter((pair)=>(finitePositive(pair?.liquidity?.usd) || 0) >= MIN_POOL_LIQUIDITY_USD)
         .sort((a,b)=>(Number(b?.liquidity?.usd)||0)-(Number(a?.liquidity?.usd)||0));
 
       if (!eligible.length) continue;
-      const confirmable = eligible.filter((pair)=>liFiToolForDexId(pair?.dexId));
+      const confirmable = eligible.filter((pair)=>
+        Boolean(directDexAdapterFor(pair?.dexId,chainKey) || liFiToolForDexId(pair?.dexId))
+      );
       const pair = confirmable[0] || eligible[0];
       const lifiToolKey = liFiToolForDexId(pair?.dexId);
+      const directAdapter = directDexAdapterFor(pair?.dexId,chainKey);
       next.set(poolIdentity(asset), {
         chain: chainKey,
         chainId: chain.chainId,
@@ -283,6 +365,7 @@ async function refreshPools() {
         quoteAddress: chain.quoteAddress,
         dexId: pair.dexId,
         lifiToolKey,
+        directAdapter,
         pairAddress: pair.pairAddress,
         priceUsd: finitePositive(pair.priceUsd),
         liquidityUsd: finitePositive(pair?.liquidity?.usd),
@@ -291,8 +374,6 @@ async function refreshPools() {
         fetchedAt: Date.now(),
       });
     }
-
-    await sleep(300);
   }
 
   state.poolsByIdentity = next;
@@ -395,9 +476,98 @@ async function lifiQuote({asset, direction, amountUnits, allowedExchange}) {
   return quote;
 }
 
+function directGasUsd(direct,nativeGasTokenUsd,chainKey) {
+  const nativeUsd=finitePositive(nativeGasTokenUsd);
+  if (!nativeUsd) return chainKey==='ethereum'?5:0.25;
+  try {
+    const gasWei=BigInt(direct?.gasEstimate||240_000n)*BigInt(direct?.gasPriceWei||0n);
+    const native=Number(gasWei)/1e18;
+    if (!Number.isFinite(native) || native<0) return chainKey==='ethereum'?5:0.25;
+    return native*nativeUsd*1.25;
+  } catch {
+    return chainKey==='ethereum'?5:0.25;
+  }
+}
+
+async function executableDexQuote({candidate,amountUnits}) {
+  const {asset,pool,direction,nativeGasTokenUsd}=candidate;
+  const chain=chainForAsset(asset);
+  const fromToken=direction==='dex_to_cex'?chain.quoteAddress:asset.address;
+  const toToken=direction==='dex_to_cex'?asset.address:chain.quoteAddress;
+  let directError=null;
+
+  if (pool?.directAdapter) {
+    try {
+      const direct=await directDexQuote({
+        dexId:pool.dexId,
+        chainKey:asset.chain,
+        tokenIn:fromToken,
+        tokenOut:toToken,
+        amountIn:amountUnits,
+      });
+      const amountOutMin=applyDirectSlippage(direct.amountOut,DIRECT_SLIPPAGE_BPS);
+      return {
+        amountOutMin,
+        gasUsd:directGasUsd(direct,nativeGasTokenUsd,asset.chain),
+        explicitFeeUsd:0,
+        quoteSource:'direct_onchain',
+        quoteSourceLabel:`${direct.protocol} direto on-chain`,
+        dexTool:direct.protocol,
+        dexLabel:pool.dexId,
+        directAdapter:direct.adapter,
+        directContract:direct.contract,
+        feeTier:direct.feeTier||null,
+        identityMethod:'explicit_cex_mapping+chainId+exact_contract+direct_dex_eth_call',
+      };
+    } catch (error) {
+      directError=error?.message||String(error);
+    }
+  }
+
+  if (pool?.lifiToolKey) {
+    const quote=await lifiQuote({
+      asset,
+      direction,
+      amountUnits,
+      allowedExchange:pool.lifiToolKey,
+    });
+    if (!quoteIdentityMatches(quote,asset,direction)) throw new Error('identity_quote_mismatch');
+    const amountOutMinRaw=quote?.estimate?.toAmountMin;
+    if (amountOutMinRaw==null) throw new Error('invalid_lifi_amount');
+    return {
+      amountOutMin:BigInt(String(amountOutMinRaw)),
+      gasUsd:gasUsd(quote),
+      explicitFeeUsd:feeUsd(quote),
+      quoteSource:'lifi_fallback',
+      quoteSourceLabel:'LI.FI fallback',
+      dexTool:quote?.__curatedDexTool||quote?.tool||pool.lifiToolKey,
+      dexLabel:quote?.__curatedDexTool||quote?.toolDetails?.name||quote?.tool||pool.dexId,
+      directAdapter:pool?.directAdapter||null,
+      directFallbackError:directError,
+      identityMethod:'explicit_cex_mapping+chainId+exact_contract+lifi_quote_echo',
+    };
+  }
+
+  throw new Error(`no_executable_quote_adapter:${directError||pool?.dexId||'unknown'}`);
+}
+
+function nativeEthUsd(snapshot) {
+  const values=[];
+  for (const books of Object.values(snapshot?.books||{})) {
+    const book=books?.ETHUSDT;
+    const bid=finitePositive(book?.bids?.[0]?.[0]);
+    const ask=finitePositive(book?.asks?.[0]?.[0]);
+    if (bid&&ask) values.push((bid+ask)/2);
+  }
+  if (!values.length) return null;
+  values.sort((a,b)=>a-b);
+  return values[Math.floor(values.length/2)];
+}
+
 function preliminaryCandidates(snapshot, budgetUsdt) {
   const candidates = [];
-  for (const asset of DEX_ASSET_REGISTRY) {
+  const nativeGasTokenUsd=nativeEthUsd(snapshot);
+  for (const asset of effectiveAssets()) {
     const identity = poolIdentity(asset);
     const pool = state.poolsByIdentity.get(identity);
     const tokenMeta = state.tokenMetaByIdentity.get(identity);
@@ -412,10 +582,10 @@ function preliminaryCandidates(snapshot, budgetUsdt) {
     const dexSellSpread = ((dexMid / cex.bestBuy.ask) - 1) * 100;
 
     if (dexBuySpread >= MIN_PRELIMINARY_SPREAD_PCT) {
-      candidates.push({asset,pool,tokenMeta,cex,direction:'dex_to_cex',preliminarySpreadPct:dexBuySpread,budgetUsdt});
+      candidates.push({asset,pool,tokenMeta,cex,direction:'dex_to_cex',preliminarySpreadPct:dexBuySpread,budgetUsdt,nativeGasTokenUsd});
     }
     if (dexSellSpread >= MIN_PRELIMINARY_SPREAD_PCT) {
-      candidates.push({asset,pool,tokenMeta,cex,direction:'cex_to_dex',preliminarySpreadPct:dexSellSpread,budgetUsdt});
+      candidates.push({asset,pool,tokenMeta,cex,direction:'cex_to_dex',preliminarySpreadPct:dexSellSpread,budgetUsdt,nativeGasTokenUsd});
     }
   }
 
@@ -466,13 +636,9 @@ async function evaluateCandidateAtBudget({candidate,costs,depth,budgetUsdt}) {
   if (direction==='dex_to_cex') {
     const budgetUnits=numberToUnits(budget,chain.quoteDecimals);
     if (!budgetUnits) return null;
-    const quote=await lifiQuote({asset,direction,amountUnits:budgetUnits,allowedExchange:pool.lifiToolKey});
-    if (!quoteIdentityMatches(quote,asset,direction)) {
-      return {eligible:false,reason:'identity_quote_mismatch',budgetUsdt:budget,netPnlUsdt:-Infinity};
-    }
-
-    const tokenOutMin=unitsToNumber(quote?.estimate?.toAmountMin,asset.decimals);
-    if (!tokenOutMin) return {eligible:false,reason:'invalid_lifi_amount',budgetUsdt:budget,netPnlUsdt:-Infinity};
+    const quote=await executableDexQuote({candidate,amountUnits:budgetUnits});
+    const tokenOutMin=unitsToNumber(quote.amountOutMin,asset.decimals);
+    if (!tokenOutMin) return {eligible:false,reason:'invalid_dex_amount',budgetUsdt:budget,netPnlUsdt:-Infinity};
     const sold=consumeBase(depth.bids,tokenOutMin);
     if (!sold?.filled) {
       return {
@@ -488,8 +654,9 @@ async function evaluateCandidateAtBudget({candidate,costs,depth,budgetUsdt}) {
 
     const cexFee=sold.quoteReceived*(exchangeFeePct(cex.bestSell.exchange,costs)/100);
     const reserve=(budget+sold.quoteReceived)*reserveRate;
-    const gas=gasUsd(quote);
-    const net=sold.quoteReceived-budget-cexFee-reserve-gas;
+    const gas=Number(quote.gasUsd)||0;
+    const dexFee=Number(quote.explicitFeeUsd)||0;
+    const net=sold.quoteReceived-budget-cexFee-reserve-gas-dexFee;
 
     return {
       eligible:net>0,
@@ -502,12 +669,17 @@ async function evaluateCandidateAtBudget({candidate,costs,depth,budgetUsdt}) {
       contract:asset.address,
       identityKey:exactIdentityKey(asset),
       sameAssetVerified:true,
-      identityMethod:'manual_cex_mapping+chainId+exact_contract+lifi_quote_echo',
+      identityMethod:quote.identityMethod,
+      identitySource:asset.identitySource||'manual_exact_contract',
       screeningStatus:tokenMeta.screeningStatus,
-      dex:quote?.__curatedDexTool||quote?.toolDetails?.name||quote?.tool||pool.dexId,
-      dexTool:quote?.__curatedDexTool||quote?.tool||null,
+      dex:quote.dexLabel||pool.dexId,
+      dexTool:quote.dexTool||null,
+      quoteSource:quote.quoteSource,
+      quoteSourceLabel:quote.quoteSourceLabel,
+      directAdapter:quote.directAdapter||null,
+      directFallbackError:quote.directFallbackError||null,
       cex:cex.bestSell.exchange,
-      buyVenue:quote?.__curatedDexTool||quote?.toolDetails?.name||quote?.tool||pool.dexId,
+      buyVenue:quote.dexLabel||pool.dexId,
       sellVenue:cex.bestSell.exchange,
       grossSpreadPct:((sold.quoteReceived/budget)-1)*100,
       budgetUsdt:budget,
@@ -515,7 +687,8 @@ async function evaluateCandidateAtBudget({candidate,costs,depth,budgetUsdt}) {
       dexTokenOutMin:tokenOutMin,
       cexSellVwap:sold.vwap,
       gasUsd:gas,
-      lifiFeeUsd:feeUsd(quote),
+      lifiFeeUsd:quote.quoteSource==='lifi_fallback'?Number(quote.explicitFeeUsd||0):0,
+      dexRoutingFeeUsd:dexFee,
       cexTradingFeeUsdt:cexFee,
       reserveUsdt:reserve,
       netPnlUsdt:net,
@@ -542,18 +715,15 @@ async function evaluateCandidateAtBudget({candidate,costs,depth,budgetUsdt}) {
 
   const tokenUnits=numberToUnits(bought.baseQty,asset.decimals);
   if (!tokenUnits) return null;
-  const quote=await lifiQuote({asset,direction,amountUnits:tokenUnits,allowedExchange:pool.lifiToolKey});
-  if (!quoteIdentityMatches(quote,asset,direction)) {
-    return {eligible:false,reason:'identity_quote_mismatch',budgetUsdt:budget,netPnlUsdt:-Infinity};
-  }
-
-  const stableOutMin=unitsToNumber(quote?.estimate?.toAmountMin,chain.quoteDecimals);
-  if (!stableOutMin) return {eligible:false,reason:'invalid_lifi_amount',budgetUsdt:budget,netPnlUsdt:-Infinity};
+  const quote=await executableDexQuote({candidate,amountUnits:tokenUnits});
+  const stableOutMin=unitsToNumber(quote.amountOutMin,chain.quoteDecimals);
+  if (!stableOutMin) return {eligible:false,reason:'invalid_dex_amount',budgetUsdt:budget,netPnlUsdt:-Infinity};
 
   const cexFee=bought.quoteSpent*(exchangeFeePct(cex.bestBuy.exchange,costs)/100);
   const reserve=(bought.quoteSpent+stableOutMin)*reserveRate;
-  const gas=gasUsd(quote);
-  const net=stableOutMin-bought.quoteSpent-cexFee-reserve-gas;
+  const gas=Number(quote.gasUsd)||0;
+  const dexFee=Number(quote.explicitFeeUsd)||0;
+  const net=stableOutMin-bought.quoteSpent-cexFee-reserve-gas-dexFee;
 
   return {
     eligible:net>0,
@@ -566,13 +736,18 @@ async function evaluateCandidateAtBudget({candidate,costs,depth,budgetUsdt}) {
     contract:asset.address,
     identityKey:exactIdentityKey(asset),
     sameAssetVerified:true,
-    identityMethod:'manual_cex_mapping+chainId+exact_contract+lifi_quote_echo',
+    identityMethod:quote.identityMethod,
+    identitySource:asset.identitySource||'manual_exact_contract',
     screeningStatus:tokenMeta.screeningStatus,
-    dex:quote?.__curatedDexTool||quote?.toolDetails?.name||quote?.tool||pool.dexId,
-    dexTool:quote?.__curatedDexTool||quote?.tool||null,
+    dex:quote.dexLabel||pool.dexId,
+    dexTool:quote.dexTool||null,
+    quoteSource:quote.quoteSource,
+    quoteSourceLabel:quote.quoteSourceLabel,
+    directAdapter:quote.directAdapter||null,
+    directFallbackError:quote.directFallbackError||null,
     cex:cex.bestBuy.exchange,
     buyVenue:cex.bestBuy.exchange,
-    sellVenue:quote?.__curatedDexTool||quote?.toolDetails?.name||quote?.tool||pool.dexId,
+    sellVenue:quote.dexLabel||pool.dexId,
     grossSpreadPct:((stableOutMin/bought.quoteSpent)-1)*100,
     budgetUsdt:bought.quoteSpent,
     executableBudgetUsdt:bought.quoteSpent,
@@ -580,7 +755,8 @@ async function evaluateCandidateAtBudget({candidate,costs,depth,budgetUsdt}) {
     cexBuyVwap:bought.vwap,
     dexStableOutMin:stableOutMin,
     gasUsd:gas,
-    lifiFeeUsd:feeUsd(quote),
+    lifiFeeUsd:quote.quoteSource==='lifi_fallback'?Number(quote.explicitFeeUsd||0):0,
+    dexRoutingFeeUsd:dexFee,
     cexTradingFeeUsdt:cexFee,
     reserveUsdt:reserve,
     netPnlUsdt:net,
@@ -621,7 +797,7 @@ async function findMaximumProfitable({candidate,costs,depth}) {
       break;
     }
     previousHigher=budget;
-    await sleep(LIFI_QUOTE_DELAY_MS);
+    await sleep(candidate.pool?.directAdapter?DIRECT_QUOTE_DELAY_MS:LIFI_QUOTE_DELAY_MS);
   }
 
   if (positive && previousHigher && previousHigher>positive.budgetUsdt) {
@@ -638,7 +814,7 @@ async function findMaximumProfitable({candidate,costs,depth}) {
       } else {
         high=mid;
       }
-      await sleep(LIFI_QUOTE_DELAY_MS);
+      await sleep(candidate.pool?.directAdapter?DIRECT_QUOTE_DELAY_MS:LIFI_QUOTE_DELAY_MS);
     }
   }
 
@@ -725,20 +901,83 @@ async function confirmCandidate(candidate, costs) {
     cexNetwork:tokenNetwork,
     quoteNetwork,
     knownNetworkRestriction:knownRestricted,
-    confirmationModel:'lifi_exact_contract_quote+100_level_cex_depth+explicit_cex_mapping+directional_token_usdt_rebalance_validation_when_public',
+    confirmationModel:`${search.best.quoteSource||'dex_quote'}+100_level_cex_depth+explicit_cex_mapping+directional_token_usdt_rebalance_validation_when_public`,
   };
 }
 
 
+function buildDexFunnel({snapshot,assets,preliminary,toConfirm,confirmed,valid}) {
+  const dropReasons={
+    noLiquidPool:0,
+    screeningDenied:0,
+    noCexBook:0,
+    spreadBelowPreliminary:0,
+    belowConfirmationThreshold:0,
+    noQuoteAdapter:0,
+    waitingConfirmationBudget:0,
+    confirmationError:confirmed.filter((x)=>x.kind==='DEX_CEX_ERROR').length,
+    nonPositiveAfterCosts:valid.filter((x)=>x.reason==='non_positive_net').length,
+    knownNetworkRestriction:valid.filter((x)=>x.knownNetworkRestriction).length,
+    rebalanceUnverified:valid.filter((x)=>x.rebalanceStatus==='unverified').length,
+  };
+
+  let screenedAllowed=0;
+  let cexComparable=0;
+  for (const asset of assets) {
+    const key=exactIdentityKey(asset);
+    const pool=state.poolsByIdentity.get(key);
+    if (!pool) { dropReasons.noLiquidPool+=1; continue; }
+    const meta=state.tokenMetaByIdentity.get(key);
+    if (!screeningAllowed(meta?.screeningStatus)) { dropReasons.screeningDenied+=1; continue; }
+    screenedAllowed+=1;
+    if (!bestCexSides(snapshot,asset.cexSymbol)) { dropReasons.noCexBook+=1; continue; }
+    cexComparable+=1;
+    const routes=preliminary.filter((x)=>x.asset===asset);
+    if (!routes.length) dropReasons.spreadBelowPreliminary+=1;
+  }
+
+  const strong=preliminary.filter((x)=>x.preliminarySpreadPct>=MIN_CONFIRM_SPREAD_PCT);
+  dropReasons.belowConfirmationThreshold=preliminary.length-strong.length;
+  const confirmable=strong.filter((x)=>Boolean(x.pool?.directAdapter||x.pool?.lifiToolKey));
+  dropReasons.noQuoteAdapter=strong.length-confirmable.length;
+  dropReasons.waitingConfirmationBudget=Math.max(0,confirmable.length-toConfirm.length);
+
+  return {
+    identities:assets.length,
+    manualIdentities:DEX_ASSET_REGISTRY.length,
+    autoVerifiedIdentities:state.autoAssets.length,
+    withLiquidPool:state.poolsByIdentity.size,
+    screenedAllowed,
+    cexComparable,
+    preliminaryRoutes:preliminary.length,
+    strongRoutes:strong.length,
+    directConfirmableRoutes:strong.filter((x)=>Boolean(x.pool?.directAdapter)).length,
+    confirmableRoutes:confirmable.length,
+    selectedForConfirmation:toConfirm.length,
+    confirmedRoutes:valid.length,
+    economicsPositiveRoutes:valid.filter((x)=>x.economicsEligible).length,
+    operationalEligibleRoutes:valid.filter((x)=>x.eligible).length,
+    dropReasons,
+  };
+}
+
 export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
-  validateRegistry();
   await refreshTools().catch(()=>{});
+  await refreshAutoRegistry();
+  const assets=effectiveAssets();
+  validateRegistry(assets);
   await Promise.all([refreshPools(),refreshTokenMetadata()]);
   const preliminary = preliminaryCandidates(snapshot,budgetUsdt);
-  const toConfirm = preliminary
-    .filter((candidate)=>candidate.preliminarySpreadPct>=MIN_CONFIRM_SPREAD_PCT)
+  const strong=preliminary.filter((candidate)=>candidate.preliminarySpreadPct>=MIN_CONFIRM_SPREAD_PCT);
+  const directCandidates=strong
+    .filter((candidate)=>Boolean(candidate.pool?.directAdapter))
+    .slice(0,MAX_DIRECT_CONFIRMATIONS);
+  const directKeys=new Set(directCandidates.map((x)=>`${exactIdentityKey(x.asset)}:${x.direction}`));
+  const fallbackCandidates=strong
     .filter((candidate)=>Boolean(candidate.pool?.lifiToolKey))
-    .slice(0,MAX_CONFIRMED_CANDIDATES);
+    .filter((candidate)=>!directKeys.has(`${exactIdentityKey(candidate.asset)}:${candidate.direction}`))
+    .slice(0,MAX_FALLBACK_CONFIRMATIONS);
+  const toConfirm=[...directCandidates,...fallbackCandidates];
   const confirmed = [];
 
   for (const candidate of toConfirm) {
@@ -782,7 +1021,10 @@ export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
     contract:x.asset.address,
     identityKey:exactIdentityKey(x.asset),
     sameAssetVerified:true,
-    identityMethod:'manual_cex_mapping+chainId+exact_dex_contract',
+    identityMethod:x.asset.identitySource==='manual_exact_contract'
+      ? 'manual_cex_mapping+chainId+exact_dex_contract'
+      : 'explicit_cex_mapping+uniswap_token_list+lifi_exact_contract_agreement',
+    identitySource:x.asset.identitySource||'manual_exact_contract',
     cexContractVerified:null,
     cexIdentityConfidence:'manual_mapping_contract_unverified',
     dex:x.pool.dexId,
@@ -793,21 +1035,29 @@ export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
     buyVenue:x.direction==='dex_to_cex' ? x.pool.dexId : x.cex.bestBuy.exchange,
     sellVenue:x.direction==='dex_to_cex' ? x.cex.bestSell.exchange : x.pool.dexId,
     preliminarySpreadPct:x.preliminarySpreadPct,
+    quoteAdapter:x.pool.directAdapter||(x.pool.lifiToolKey?'lifi_fallback':null),
     status:'awaiting_executable_quote',
   }));
+
+  const funnel=buildDexFunnel({snapshot,assets,preliminary,toConfirm,confirmed,valid});
 
   return {
     generatedAt:Date.now(),
     mode:'same-chain-read-only',
-    chains:[...new Set(DEX_ASSET_REGISTRY.map((x)=>chainForAsset(x)?.name).filter(Boolean))],
+    chains:[...new Set(assets.map((x)=>chainForAsset(x)?.name).filter(Boolean))],
     curatedDexes:CURATED_DEX_NAMES,
-    identityPolicy:'manual cex mapping + chainId + exact contract address; never ticker-only',
+    identityPolicy:'explicit CEX mapping + chainId + exact contract; auto expansion requires Uniswap token list and LI.FI exact-contract agreement; never arbitrary ticker-only',
     transferabilityVerified:false,
     minPoolLiquidityUsd:MIN_POOL_LIQUIDITY_USD,
-    registryAssets:DEX_ASSET_REGISTRY.length,
+    registryAssets:assets.length,
+    manualRegistryAssets:DEX_ASSET_REGISTRY.length,
+    autoVerifiedAssets:state.autoAssets.length,
+    autoAllowlistCandidates:AUTO_ASSET_ALLOWLIST.length,
     poolsFound:state.poolsByIdentity.size,
+    directDex:directDexSnapshot(),
     lifiDexTools:state.toolKeys.length ? state.toolKeys : LIFI_TOOL_FALLBACK,
-    executableDexes:[...new Set([...state.poolsByIdentity.values()].map((pool)=>pool.lifiToolKey).filter(Boolean))],
+    executableDexes:[...new Set([...state.poolsByIdentity.values()].flatMap((pool)=>[pool.directAdapter,pool.lifiToolKey]).filter(Boolean))],
+    funnel,
     preliminaryCount:preliminary.length,
     preliminaryTop5,
     confirmedCount:valid.length,
@@ -822,7 +1072,7 @@ export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
 }
 
 export function dexRegistrySnapshot() {
-  return DEX_ASSET_REGISTRY.map((asset)=>{
+  return effectiveAssets().map((asset)=>{
     const chain=chainForAsset(asset);
     return {
       canonicalId:asset.canonicalId,
@@ -834,6 +1084,7 @@ export function dexRegistrySnapshot() {
       quoteSymbol:chain?.quoteSymbol,
       quoteContract:chain?.quoteAddress,
       identityKey:exactIdentityKey(asset),
+      identitySource:asset.identitySource||'manual_exact_contract',
       screeningStatus:state.tokenMetaByIdentity.get(exactIdentityKey(asset))?.screeningStatus || 'unknown',
       screeningSource:state.tokenMetaByIdentity.get(exactIdentityKey(asset))?.screeningSource || 'not_loaded',
       pool:state.poolsByIdentity.get(exactIdentityKey(asset)) || null,
