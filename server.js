@@ -26,7 +26,7 @@ const OKX_BASES = ['https://www.okx.com','https://openapi.okx.com'];
 const GATE_BASES = ['https://api.gateio.ws/api/v4'];
 const KUCOIN_BASES = ['https://api.kucoin.com'];
 const REQUEST_TIMEOUT_MS = 10_000;
-const APP_VERSION = '0.21.1-recovery.1';
+const APP_VERSION = '0.21.2-recovery.1';
 const RADAR_CACHE_MS = 750;
 
 let runtimePromise = null;
