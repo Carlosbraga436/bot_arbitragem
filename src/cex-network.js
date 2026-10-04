@@ -3,22 +3,52 @@ import { chainForAsset, normalizeAddress } from './dex-registry.js';
 const CACHE_MS=5*60_000;
 const cache=new Map();
 
+function normalizedLabel(value) {
+  return String(value||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+}
+
 function chainAliases(asset) {
   const chain=chainForAsset(asset);
   if (!chain) return [];
   if (chain.chainId===1) return ['eth','ethereum','erc20'];
-  if (chain.chainId===42161) return ['arb','arbitrum','arbitrum one'];
-  return [String(chain.name||'').toLowerCase()];
+  if (chain.chainId===42161) return ['arb','arbitrum','arbitrumone'];
+  return [normalizedLabel(chain.name)];
 }
 
 function chainEntryMatches(entry, asset) {
-  const aliases=chainAliases(asset);
-  const hay=`${entry?.chainId||''} ${entry?.chainName||''}`.toLowerCase();
-  const aliasMatch=aliases.some((alias)=>hay===alias||hay.includes(alias));
-  const contract=normalizeAddress(entry?.contractAddress);
+  const aliases=chainAliases(asset).map(normalizedLabel);
+  const values=[
+    entry?.chainId,
+    entry?.chain,
+    entry?.chainName,
+    entry?.name,
+  ].map(normalizedLabel).filter(Boolean);
+  return aliases.some((alias)=>values.some((value)=>value===alias || value.includes(alias) || alias.includes(value)));
+}
+
+function contractVerification(entry, asset) {
+  const raw=entry?.contractAddress ?? entry?.addr ?? entry?.contract_address ?? null;
+  const contract=normalizeAddress(raw);
   const expected=normalizeAddress(asset?.address);
-  const contractMatch=!contract || contract==='0x' || contract===expected;
-  return aliasMatch && contractMatch;
+  if (!contract || contract==='0x') {
+    return {
+      contractVerified:null,
+      contractStatus:'contract_not_exposed',
+      contractAddress:raw||null,
+    };
+  }
+  if (contract===expected) {
+    return {
+      contractVerified:true,
+      contractStatus:'exact_contract_match',
+      contractAddress:raw,
+    };
+  }
+  return {
+    contractVerified:false,
+    contractStatus:'contract_mismatch',
+    contractAddress:raw,
+  };
 }
 
 async function fetchJson(url, timeoutMs=6000) {
@@ -27,7 +57,7 @@ async function fetchJson(url, timeoutMs=6000) {
   try {
     const r=await fetch(url,{
       signal:controller.signal,
-      headers:{'user-agent':'radar-cripto-carlos-network/0.21'},
+      headers:{'user-agent':'radar-cripto-carlos-network/0.21.1'},
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return await r.json();
@@ -36,64 +66,116 @@ async function fetchJson(url, timeoutMs=6000) {
   }
 }
 
+async function fetchFirst(urls, parser) {
+  const errors=[];
+  for (const url of urls) {
+    try {
+      const data=await fetchJson(url);
+      return {source:url, ...parser(data)};
+    } catch(error) {
+      errors.push(`${url}: ${error?.message||error}`);
+    }
+  }
+  throw new Error(errors.join(' | '));
+}
+
 async function kucoinNetwork(asset) {
   const currency=String(asset?.symbol||'').toUpperCase();
-  const data=await fetchJson(`https://api.kucoin.com/api/v3/currencies/${encodeURIComponent(currency)}`);
-  if (data?.code!=='200000') throw new Error('kucoin_currency_response_invalid');
-  const chains=Array.isArray(data?.data?.chains)?data.data.chains:[];
-  const entry=chains.find((x)=>chainEntryMatches(x,asset));
+  const urls=[
+    `https://api.kucoin.com/api/ua/v2/market/currency?currency=${encodeURIComponent(currency)}`,
+    `https://api.kucoin.com/api/v3/currencies/${encodeURIComponent(currency)}`,
+  ];
+
+  const result=await fetchFirst(urls,(data)=>{
+    if (data?.code!=='200000') throw new Error('kucoin_currency_response_invalid');
+    const root=data?.data||{};
+    const chains=Array.isArray(root?.list)
+      ? root.list
+      : (Array.isArray(root?.chains)?root.chains:[]);
+    return {chains};
+  });
+
+  const entry=result.chains.find((x)=>chainEntryMatches(x,asset));
   if (!entry) {
     return {
       exchange:'kucoin',
       publicVerificationAvailable:true,
       networkMatched:false,
+      contractVerified:null,
       depositEnabled:false,
       withdrawEnabled:false,
       status:'network_not_found',
+      source:result.source,
     };
   }
+
+  const contract=contractVerification(entry,asset);
+  if (contract.contractVerified===false) {
+    return {
+      exchange:'kucoin',
+      publicVerificationAvailable:true,
+      networkMatched:true,
+      depositEnabled:false,
+      withdrawEnabled:false,
+      status:'contract_mismatch',
+      chainId:entry?.chainId||entry?.chain||null,
+      chainName:entry?.chainName||null,
+      ...contract,
+      source:result.source,
+    };
+  }
+
+  const depositEnabled=entry?.isDepositEnabled===true;
+  const withdrawEnabled=entry?.isWithdrawEnabled===true;
+
   return {
     exchange:'kucoin',
     publicVerificationAvailable:true,
     networkMatched:true,
-    depositEnabled:entry?.isDepositEnabled===true,
-    withdrawEnabled:entry?.isWithdrawEnabled===true,
-    status:entry?.isDepositEnabled===true && entry?.isWithdrawEnabled===true
-      ? 'deposit_and_withdraw_enabled'
+    depositEnabled,
+    withdrawEnabled,
+    status:depositEnabled && withdrawEnabled
+      ? (contract.contractVerified===true?'deposit_withdraw_and_contract_verified':'deposit_withdraw_open_contract_unavailable')
       : 'network_restricted',
-    chainId:entry?.chainId||null,
+    chainId:entry?.chainId||entry?.chain||null,
     chainName:entry?.chainName||null,
-    contractAddress:entry?.contractAddress||null,
-    withdrawMinFee:Number(entry?.withdrawMinFee??entry?.withdrawalMinFee)||null,
-    withdrawMinSize:Number(entry?.withdrawMinSize??entry?.withdrawalMinSize)||null,
-    source:'kucoin_public_currency_api',
+    ...contract,
+    withdrawMinFee:Number(entry?.withdrawMinFee??entry?.withdrawalMinFee??entry?.withdrawFee)||null,
+    withdrawMinSize:Number(entry?.minWithdrawSize??entry?.withdrawMinSize??entry?.withdrawalMinSize)||null,
+    source:result.source,
   };
-}
-
-function gateChainEntryMatches(entry, asset) {
-  const aliases=chainAliases(asset);
-  const hay=`${entry?.name||''} ${entry?.chain||''}`.toLowerCase();
-  const aliasMatch=aliases.some((alias)=>hay===alias||hay.includes(alias));
-  const contract=normalizeAddress(entry?.addr||entry?.contract_address);
-  const expected=normalizeAddress(asset?.address);
-  const contractMatch=!contract || contract==='0x' || contract===expected;
-  return aliasMatch && contractMatch;
 }
 
 async function gateNetwork(asset) {
   const currency=String(asset?.symbol||'').toUpperCase();
   const data=await fetchJson(`https://api.gateio.ws/api/v4/spot/currencies/${encodeURIComponent(currency)}`);
   const chains=Array.isArray(data?.chains)?data.chains:[];
-  const entry=chains.find((x)=>gateChainEntryMatches(x,asset));
+  const entry=chains.find((x)=>chainEntryMatches(x,asset));
 
   if (!entry) {
     return {
       exchange:'gate',
       publicVerificationAvailable:true,
       networkMatched:false,
+      contractVerified:null,
       depositEnabled:false,
       withdrawEnabled:false,
       status:'network_not_found',
+      source:'gate_public_spot_currency_api',
+    };
+  }
+
+  const contract=contractVerification(entry,asset);
+  if (contract.contractVerified===false) {
+    return {
+      exchange:'gate',
+      publicVerificationAvailable:true,
+      networkMatched:true,
+      depositEnabled:false,
+      withdrawEnabled:false,
+      status:'contract_mismatch',
+      chainName:entry?.name||entry?.chain||null,
+      ...contract,
       source:'gate_public_spot_currency_api',
     };
   }
@@ -108,10 +190,10 @@ async function gateNetwork(asset) {
     depositEnabled,
     withdrawEnabled,
     status:depositEnabled && withdrawEnabled
-      ? 'deposit_and_withdraw_enabled'
+      ? (contract.contractVerified===true?'deposit_withdraw_and_contract_verified':'deposit_withdraw_open_contract_unavailable')
       : 'network_restricted',
-    chainName:entry?.name||null,
-    contractAddress:entry?.addr||null,
+    chainName:entry?.name||entry?.chain||null,
+    ...contract,
     withdrawDelayed:entry?.withdraw_delayed===true,
     source:'gate_public_spot_currency_api',
   };
@@ -134,7 +216,8 @@ export async function validateCexNetwork(exchange, asset) {
       value={
         exchange:ex,
         publicVerificationAvailable:true,
-        networkMatched:false,
+        networkMatched:null,
+        contractVerified:null,
         depositEnabled:null,
         withdrawEnabled:null,
         status:'public_check_failed',
@@ -146,6 +229,7 @@ export async function validateCexNetwork(exchange, asset) {
       exchange:ex,
       publicVerificationAvailable:false,
       networkMatched:null,
+      contractVerified:null,
       depositEnabled:null,
       withdrawEnabled:null,
       status:'not_verifiable_without_authenticated_exchange_api',
@@ -159,7 +243,23 @@ export async function validateCexNetwork(exchange, asset) {
 
 export function transferStatusForRoute(network) {
   if (!network) return 'unverified';
-  if (network.publicVerificationAvailable && network.networkMatched && network.depositEnabled && network.withdrawEnabled) return 'verified_open';
-  if (network.publicVerificationAvailable && (network.depositEnabled===false || network.withdrawEnabled===false)) return 'restricted';
+  if (
+    network.publicVerificationAvailable
+    && network.networkMatched
+    && network.contractVerified===true
+    && network.depositEnabled
+    && network.withdrawEnabled
+  ) return 'verified_open';
+
+  if (
+    network.publicVerificationAvailable
+    && (
+      network.networkMatched===false
+      || network.contractVerified===false
+      || network.depositEnabled===false
+      || network.withdrawEnabled===false
+    )
+  ) return 'restricted';
+
   return 'unverified';
 }
