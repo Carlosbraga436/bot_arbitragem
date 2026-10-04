@@ -1,13 +1,13 @@
 {
   "name": "radar-cripto-carlos",
-  "version": "0.20.0-recovery.1",
+  "version": "0.21.0-recovery.1",
   "private": true,
   "type": "module",
-  "description": "Radar Cripto multi-exchange CEX + DEX same-chain com identidade por contrato exato. Somente leitura/simulação, sem ordens.",
+  "description": "Radar Cripto CEX + DEX same-chain com contrato exato, profundidade CEX e capacidade máxima lucrativa. Somente leitura/simulação.",
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
-    "check": "node --check server.js && node --check src/core.js && node --check src/market-hub.js && node --check src/dex-registry.js && node --check src/dex-radar.js && node --check public/app.js && node --check scripts/diagnose-live.js",
+    "check": "node --check server.js && node --check src/core.js && node --check src/market-hub.js && node --check src/dex-registry.js && node --check src/cex-depth.js && node --check src/cex-network.js && node --check src/dex-radar.js && node --check public/app.js && node --check scripts/diagnose-live.js",
     "diagnose": "node scripts/diagnose-live.js"
   },
   "engines": {
