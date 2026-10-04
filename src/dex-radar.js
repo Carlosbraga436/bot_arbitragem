@@ -1,4 +1,6 @@
 import { consumeBase, consumeQuote, exchangeFeePct } from './core.js';
+import { depthCapacity, fetchCexDepth } from './cex-depth.js';
+import { transferStatusForRoute, validateCexNetwork } from './cex-network.js';
 import {
   CURATED_DEX_NAMES,
   CURATED_DEX_ID_ALIASES,
@@ -23,6 +25,9 @@ const MIN_PRELIMINARY_SPREAD_PCT = 0.25;
 const MAX_CONFIRMED_CANDIDATES = 1;
 const MIN_CONFIRM_SPREAD_PCT = 0.50;
 const LIFI_SLIPPAGE = 0.005;
+const MIN_EXECUTION_USDT = 10;
+const CAPACITY_SEARCH_STEPS = Object.freeze([1,0.75,0.50,0.35,0.25,0.15,0.10]);
+const CAPACITY_BINARY_STEPS = 3;
 const LIFI_TOOL_FALLBACK = Object.freeze([
   'uniswap',
   'sushiswap',
@@ -407,31 +412,69 @@ function preliminaryCandidates(snapshot, budgetUsdt) {
     .sort((a,b)=>b.preliminarySpreadPct-a.preliminarySpreadPct);
 }
 
-async function confirmCandidate(candidate, costs) {
-  const {asset,pool,tokenMeta,cex,direction,budgetUsdt} = candidate;
-  const chain = chainForAsset(asset);
-  const reserveRate = (Number(costs?.reservePct)||0)/100;
+function roundedBudget(value) {
+  const n=finitePositive(value);
+  return n ? Math.max(MIN_EXECUTION_USDT,Math.floor(n*100)/100) : null;
+}
 
-  if (direction === 'dex_to_cex') {
-    const budgetUnits = numberToUnits(budgetUsdt, chain.quoteDecimals);
+function uniqueDescending(values) {
+  return [...new Set(values.filter((x)=>finitePositive(x)).map((x)=>roundedBudget(x)))]
+    .filter((x)=>finitePositive(x))
+    .sort((a,b)=>b-a);
+}
+
+function cexCapacityBudget(direction, depth, poolPriceUsd, requestedBudgetUsdt) {
+  const capacity=depthCapacity(depth);
+  const requested=finitePositive(requestedBudgetUsdt);
+  if (!requested) return null;
+
+  if (direction==='cex_to_dex') {
+    return Math.min(requested,capacity.askQuote);
+  }
+
+  const approximateQuoteCapacity=capacity.bidBase * (finitePositive(poolPriceUsd)||0);
+  return Math.min(requested,approximateQuoteCapacity);
+}
+
+async function evaluateCandidateAtBudget({candidate,costs,depth,budgetUsdt}) {
+  const {asset,pool,tokenMeta,cex,direction} = candidate;
+  const chain=chainForAsset(asset);
+  const reserveRate=(Number(costs?.reservePct)||0)/100;
+  const budget=roundedBudget(budgetUsdt);
+  if (!budget) return null;
+
+  if (direction==='dex_to_cex') {
+    const budgetUnits=numberToUnits(budget,chain.quoteDecimals);
     if (!budgetUnits) return null;
-    const quote = await lifiQuote({asset,direction,amountUnits:budgetUnits,allowedExchange:pool.lifiToolKey});
-    if (!quoteIdentityMatches(quote,asset,direction)) return null;
+    const quote=await lifiQuote({asset,direction,amountUnits:budgetUnits,allowedExchange:pool.lifiToolKey});
+    if (!quoteIdentityMatches(quote,asset,direction)) {
+      return {eligible:false,reason:'identity_quote_mismatch',budgetUsdt:budget,netPnlUsdt:-Infinity};
+    }
 
-    const tokenOutMin = unitsToNumber(quote?.estimate?.toAmountMin, asset.decimals);
-    if (!tokenOutMin) return null;
-    const sold = consumeBase(cex.bestSell.book.bids, tokenOutMin);
-    if (!sold?.filled) return null;
+    const tokenOutMin=unitsToNumber(quote?.estimate?.toAmountMin,asset.decimals);
+    if (!tokenOutMin) return {eligible:false,reason:'invalid_lifi_amount',budgetUsdt:budget,netPnlUsdt:-Infinity};
+    const sold=consumeBase(depth.bids,tokenOutMin);
+    if (!sold?.filled) {
+      return {
+        eligible:false,
+        reason:'cex_depth_insufficient',
+        budgetUsdt:budget,
+        executableBudgetUsdt:null,
+        baseNeeded:tokenOutMin,
+        baseVisible:sold?.baseSold||0,
+        netPnlUsdt:-Infinity,
+      };
+    }
 
-    const cexFee = sold.quoteReceived * (exchangeFeePct(cex.bestSell.exchange,costs)/100);
-    const reserve = (budgetUsdt + sold.quoteReceived) * reserveRate;
-    const gas = gasUsd(quote);
-    const net = sold.quoteReceived - budgetUsdt - cexFee - reserve - gas;
+    const cexFee=sold.quoteReceived*(exchangeFeePct(cex.bestSell.exchange,costs)/100);
+    const reserve=(budget+sold.quoteReceived)*reserveRate;
+    const gas=gasUsd(quote);
+    const net=sold.quoteReceived-budget-cexFee-reserve-gas;
 
     return {
-      kind:'DEX_CEX',
       eligible:net>0,
-      direction:'dex_to_cex',
+      reason:net>0?'positive_net':'non_positive_net',
+      direction,
       symbol:asset.cexSymbol,
       asset:asset.symbol,
       chain:chain.name,
@@ -441,14 +484,14 @@ async function confirmCandidate(candidate, costs) {
       sameAssetVerified:true,
       identityMethod:'manual_cex_mapping+chainId+exact_contract+lifi_quote_echo',
       screeningStatus:tokenMeta.screeningStatus,
-      dex:quote?.__curatedDexTool || quote?.toolDetails?.name || quote?.tool || pool.dexId,
-      dexTool:quote?.__curatedDexTool || quote?.tool || null,
+      dex:quote?.__curatedDexTool||quote?.toolDetails?.name||quote?.tool||pool.dexId,
+      dexTool:quote?.__curatedDexTool||quote?.tool||null,
       cex:cex.bestSell.exchange,
-      buyVenue:quote?.__curatedDexTool || quote?.toolDetails?.name || quote?.tool || pool.dexId,
+      buyVenue:quote?.__curatedDexTool||quote?.toolDetails?.name||quote?.tool||pool.dexId,
       sellVenue:cex.bestSell.exchange,
-      grossSpreadPct:((sold.quoteReceived/budgetUsdt)-1)*100,
-      budgetUsdt,
-      executableBudgetUsdt:budgetUsdt,
+      grossSpreadPct:((sold.quoteReceived/budget)-1)*100,
+      budgetUsdt:budget,
+      executableBudgetUsdt:budget,
       dexTokenOutMin:tokenOutMin,
       cexSellVwap:sold.vwap,
       gasUsd:gas,
@@ -456,36 +499,46 @@ async function confirmCandidate(candidate, costs) {
       cexTradingFeeUsdt:cexFee,
       reserveUsdt:reserve,
       netPnlUsdt:net,
-      netPct:(net/budgetUsdt)*100,
+      netPct:(net/budget)*100,
       poolLiquidityUsd:pool.liquidityUsd,
       poolVolume24hUsd:pool.volume24hUsd,
       pairUrl:pool.url,
-      transferabilityVerified:false,
       routeType:'same_chain_inventory_prepositioned',
       quoteSlippage:LIFI_SLIPPAGE,
       quotedAt:Date.now(),
     };
   }
 
-  const maxCexBudget = Math.min(budgetUsdt, cex.bestBuy.ask * cex.bestBuy.askQty);
-  const bought = consumeQuote(cex.bestBuy.book.asks, maxCexBudget);
-  if (!bought?.filled || !bought.baseQty) return null;
-  const tokenUnits = numberToUnits(bought.baseQty, asset.decimals);
-  if (!tokenUnits) return null;
-  const quote = await lifiQuote({asset,direction,amountUnits:tokenUnits,allowedExchange:pool.lifiToolKey});
-  if (!quoteIdentityMatches(quote,asset,direction)) return null;
+  const bought=consumeQuote(depth.asks,budget);
+  if (!bought?.filled || !bought.baseQty) {
+    return {
+      eligible:false,
+      reason:'cex_depth_insufficient',
+      budgetUsdt:budget,
+      executableBudgetUsdt:null,
+      netPnlUsdt:-Infinity,
+    };
+  }
 
-  const stableOutMin = unitsToNumber(quote?.estimate?.toAmountMin, chain.quoteDecimals);
-  if (!stableOutMin) return null;
-  const cexFee = bought.quoteSpent * (exchangeFeePct(cex.bestBuy.exchange,costs)/100);
-  const reserve = (bought.quoteSpent + stableOutMin) * reserveRate;
-  const gas = gasUsd(quote);
-  const net = stableOutMin - bought.quoteSpent - cexFee - reserve - gas;
+  const tokenUnits=numberToUnits(bought.baseQty,asset.decimals);
+  if (!tokenUnits) return null;
+  const quote=await lifiQuote({asset,direction,amountUnits:tokenUnits,allowedExchange:pool.lifiToolKey});
+  if (!quoteIdentityMatches(quote,asset,direction)) {
+    return {eligible:false,reason:'identity_quote_mismatch',budgetUsdt:budget,netPnlUsdt:-Infinity};
+  }
+
+  const stableOutMin=unitsToNumber(quote?.estimate?.toAmountMin,chain.quoteDecimals);
+  if (!stableOutMin) return {eligible:false,reason:'invalid_lifi_amount',budgetUsdt:budget,netPnlUsdt:-Infinity};
+
+  const cexFee=bought.quoteSpent*(exchangeFeePct(cex.bestBuy.exchange,costs)/100);
+  const reserve=(bought.quoteSpent+stableOutMin)*reserveRate;
+  const gas=gasUsd(quote);
+  const net=stableOutMin-bought.quoteSpent-cexFee-reserve-gas;
 
   return {
-    kind:'CEX_DEX',
     eligible:net>0,
-    direction:'cex_to_dex',
+    reason:net>0?'positive_net':'non_positive_net',
+    direction,
     symbol:asset.cexSymbol,
     asset:asset.symbol,
     chain:chain.name,
@@ -495,13 +548,13 @@ async function confirmCandidate(candidate, costs) {
     sameAssetVerified:true,
     identityMethod:'manual_cex_mapping+chainId+exact_contract+lifi_quote_echo',
     screeningStatus:tokenMeta.screeningStatus,
-    dex:quote?.__curatedDexTool || quote?.toolDetails?.name || quote?.tool || pool.dexId,
-    dexTool:quote?.__curatedDexTool || quote?.tool || null,
+    dex:quote?.__curatedDexTool||quote?.toolDetails?.name||quote?.tool||pool.dexId,
+    dexTool:quote?.__curatedDexTool||quote?.tool||null,
     cex:cex.bestBuy.exchange,
     buyVenue:cex.bestBuy.exchange,
-    sellVenue:quote?.__curatedDexTool || quote?.toolDetails?.name || quote?.tool || pool.dexId,
+    sellVenue:quote?.__curatedDexTool||quote?.toolDetails?.name||quote?.tool||pool.dexId,
     grossSpreadPct:((stableOutMin/bought.quoteSpent)-1)*100,
-    budgetUsdt,
+    budgetUsdt:bought.quoteSpent,
     executableBudgetUsdt:bought.quoteSpent,
     baseQty:bought.baseQty,
     cexBuyVwap:bought.vwap,
@@ -515,12 +568,134 @@ async function confirmCandidate(candidate, costs) {
     poolLiquidityUsd:pool.liquidityUsd,
     poolVolume24hUsd:pool.volume24hUsd,
     pairUrl:pool.url,
-    transferabilityVerified:false,
     routeType:'same_chain_inventory_prepositioned',
     quoteSlippage:LIFI_SLIPPAGE,
     quotedAt:Date.now(),
   };
 }
+
+async function findMaximumProfitable({candidate,costs,depth}) {
+  const requested=finitePositive(candidate?.budgetUsdt);
+  const cap=cexCapacityBudget(candidate.direction,depth,candidate.pool?.priceUsd,requested);
+  if (!requested || !finitePositive(cap) || cap<MIN_EXECUTION_USDT) {
+    return {
+      best:null,
+      attempts:[],
+      requestedBudgetUsdt:requested,
+      visibleCexCapacityUsdt:cap||0,
+      liquidityLimited:true,
+    };
+  }
+
+  const maximum=Math.min(requested,cap);
+  const budgets=uniqueDescending(CAPACITY_SEARCH_STEPS.map((ratio)=>maximum*ratio));
+  const attempts=[];
+  let positive=null;
+  let previousHigher=null;
+
+  for (const budget of budgets) {
+    const result=await evaluateCandidateAtBudget({candidate,costs,depth,budgetUsdt:budget});
+    if (result) attempts.push(result);
+    if (result?.eligible) {
+      positive=result;
+      break;
+    }
+    previousHigher=budget;
+    await sleep(180);
+  }
+
+  if (positive && previousHigher && previousHigher>positive.budgetUsdt) {
+    let low=positive.budgetUsdt;
+    let high=previousHigher;
+    for (let i=0;i<CAPACITY_BINARY_STEPS;i+=1) {
+      const mid=roundedBudget((low+high)/2);
+      if (!mid || mid<=low || mid>=high) break;
+      const result=await evaluateCandidateAtBudget({candidate,costs,depth,budgetUsdt:mid});
+      if (result) attempts.push(result);
+      if (result?.eligible) {
+        positive=result;
+        low=mid;
+      } else {
+        high=mid;
+      }
+      await sleep(180);
+    }
+  }
+
+  const finiteAttempts=attempts.filter((x)=>Number.isFinite(x?.netPnlUsdt));
+  const best=positive || finiteAttempts.sort((a,b)=>b.netPnlUsdt-a.netPnlUsdt)[0] || null;
+
+  return {
+    best,
+    attempts,
+    requestedBudgetUsdt:requested,
+    visibleCexCapacityUsdt:cap,
+    liquidityLimited:maximum+1e-9<requested || Boolean(best && best.budgetUsdt+1e-9<requested),
+  };
+}
+
+async function confirmCandidate(candidate, costs) {
+  const {asset,cex,direction,budgetUsdt}=candidate;
+  const cexExchange=direction==='dex_to_cex'
+    ? cex.bestSell.exchange
+    : cex.bestBuy.exchange;
+
+  const depth=await fetchCexDepth(cexExchange,asset.cexSymbol,100);
+  const depthAgeMs=Math.max(0,Date.now()-Number(depth?.ts||Date.now()));
+  if (depthAgeMs>8_000) {
+    throw new Error(`stale_cex_depth:${depthAgeMs}`);
+  }
+
+  const search=await findMaximumProfitable({candidate,costs,depth});
+  if (!search.best) {
+    return {
+      eligible:false,
+      kind:'DEX_CEX_DEPTH',
+      symbol:asset.cexSymbol,
+      asset:asset.symbol,
+      chain:chainForAsset(asset)?.name,
+      chainId:chainForAsset(asset)?.chainId,
+      contract:asset.address,
+      sameAssetVerified:true,
+      reason:'no_executable_budget_after_depth_confirmation',
+      requestedBudgetUsdt:budgetUsdt,
+      visibleCexCapacityUsdt:search.visibleCexCapacityUsdt,
+      depthConfirmed:true,
+      cexDepthExchange:cexExchange,
+      cexDepthLevels:Number(depth?.levels)||0,
+      cexDepthSource:depth?.source||null,
+      netPnlUsdt:-Infinity,
+    };
+  }
+
+  const network=await validateCexNetwork(cexExchange,asset);
+  const rebalanceStatus=transferStatusForRoute(network);
+  const knownRestricted=rebalanceStatus==='restricted';
+
+  return {
+    ...search.best,
+    kind:search.best.direction==='dex_to_cex'?'DEX_CEX':'CEX_DEX',
+    eligible:Boolean(search.best.eligible) && !knownRestricted,
+    economicsEligible:Boolean(search.best.eligible),
+    operationalReady:knownRestricted?false:(rebalanceStatus==='verified_open'?true:null),
+    requestedBudgetUsdt:budgetUsdt,
+    maxProfitableBudgetUsdt:search.best.eligible?search.best.budgetUsdt:null,
+    visibleCexCapacityUsdt:search.visibleCexCapacityUsdt,
+    liquidityLimited:search.liquidityLimited,
+    capacitySearchAttempts:search.attempts.length,
+    depthConfirmed:true,
+    cexDepthExchange:cexExchange,
+    cexDepthLevels:Number(depth?.levels)||0,
+    cexDepthAgeMs:depthAgeMs,
+    cexDepthSource:depth?.source||null,
+    rebalanceStatus,
+    transferabilityVerified:rebalanceStatus==='verified_open',
+    cexNetwork:network,
+    knownNetworkRestriction:knownRestricted,
+    confirmationModel:'lifi_executable_quote+100_level_cex_depth+exact_contract',
+  };
+}
+
 
 export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
   validateRegistry();
@@ -602,6 +777,9 @@ export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
     preliminaryTop5,
     confirmedCount:valid.length,
     positiveCount:valid.filter((x)=>x.eligible).length,
+    economicsPositiveCount:valid.filter((x)=>x.economicsEligible).length,
+    depthConfirmedCount:valid.filter((x)=>x.depthConfirmed).length,
+    transferVerifiedCount:valid.filter((x)=>x.transferabilityVerified).length,
     top5:positives,
     nearest5:nearest,
     errors:confirmed.filter((x)=>x.kind==='DEX_CEX_ERROR').slice(0,5),
