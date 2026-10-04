@@ -599,7 +599,10 @@ async function findMaximumProfitable({candidate,costs,depth}) {
   }
 
   const maximum=Math.min(requested,cap);
-  const budgets=uniqueDescending(CAPACITY_SEARCH_STEPS.map((ratio)=>maximum*ratio));
+  const budgets=uniqueDescending([
+    ...CAPACITY_SEARCH_STEPS.map((ratio)=>maximum*ratio),
+    MIN_EXECUTION_USDT,
+  ]);
   const attempts=[];
   let positive=null;
   let previousHigher=null;
@@ -701,9 +704,14 @@ async function confirmCandidate(candidate, costs) {
     cexDepthSource:depth?.source||null,
     rebalanceStatus,
     transferabilityVerified:rebalanceStatus==='verified_open',
+    cexContractVerified:network?.contractVerified===true,
+    cexContractStatus:network?.contractStatus||'not_publicly_verifiable',
+    cexIdentityConfidence:network?.contractVerified===true
+      ? 'exact_public_contract_match'
+      : (network?.contractVerified===false?'contract_mismatch':'manual_mapping_contract_unverified'),
     cexNetwork:network,
     knownNetworkRestriction:knownRestricted,
-    confirmationModel:'lifi_executable_quote+100_level_cex_depth+exact_contract',
+    confirmationModel:'lifi_exact_contract_quote+100_level_cex_depth+explicit_cex_mapping+public_network_when_available',
   };
 }
 
@@ -760,7 +768,9 @@ export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
     contract:x.asset.address,
     identityKey:exactIdentityKey(x.asset),
     sameAssetVerified:true,
-    identityMethod:'manual_cex_mapping+chainId+exact_contract',
+    identityMethod:'manual_cex_mapping+chainId+exact_dex_contract',
+    cexContractVerified:null,
+    cexIdentityConfidence:'manual_mapping_contract_unverified',
     dex:x.pool.dexId,
     poolLiquidityUsd:x.pool.liquidityUsd,
     poolVolume24hUsd:x.pool.volume24hUsd,
