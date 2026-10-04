@@ -1,9 +1,9 @@
 {
   "name": "radar-cripto-carlos",
-  "version": "0.21.0-recovery.1",
+  "version": "0.21.1-recovery.1",
   "private": true,
   "type": "module",
-  "description": "Radar Cripto CEX + DEX same-chain com contrato exato, profundidade CEX e capacidade máxima lucrativa. Somente leitura/simulação.",
+  "description": "Radar Cripto CEX + DEX same-chain com contrato exato, profundidade CEX, capacidade máxima lucrativa e validação pública de rede/contrato. Somente leitura/simulação.",
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
