@@ -15,6 +15,30 @@ export const DEX_CHAINS = Object.freeze({
     quoteAddress: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
     quoteDecimals: 6,
   }),
+  base: Object.freeze({
+    chainId: 8453,
+    dexScreenerChain: 'base',
+    name: 'Base',
+    quoteSymbol: 'USDC',
+    quoteAddress: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    quoteDecimals: 6,
+  }),
+  polygon: Object.freeze({
+    chainId: 137,
+    dexScreenerChain: 'polygon',
+    name: 'Polygon',
+    quoteSymbol: 'USDT',
+    quoteAddress: '0xc2132D05D31c914a87C6611C10748AaCBbB58e8F',
+    quoteDecimals: 6,
+  }),
+  bsc: Object.freeze({
+    chainId: 56,
+    dexScreenerChain: 'bsc',
+    name: 'BNB Chain',
+    quoteSymbol: 'USDT',
+    quoteAddress: '0x55d398326f99059fF775485246999027B3197955',
+    quoteDecimals: 18,
+  }),
 });
 
 export const CURATED_DEX_NAMES = Object.freeze([
@@ -24,6 +48,8 @@ export const CURATED_DEX_NAMES = Object.freeze([
   'Balancer',
   'PancakeSwap',
   'Camelot',
+  'Aerodrome',
+  'QuickSwap',
 ]);
 
 export const CURATED_DEX_ID_ALIASES = Object.freeze([
@@ -35,6 +61,9 @@ export const CURATED_DEX_ID_ALIASES = Object.freeze([
   'pancakeswap',
   'pancake',
   'camelot',
+  'aerodrome',
+  'quickswap',
+  'quick',
 ]);
 
 // Manual registry remains the highest-trust fallback. The CEX symbol is explicit
@@ -104,6 +133,33 @@ export const AUTO_ASSET_ALLOWLIST = Object.freeze([
   { canonicalId:'pendle', symbol:'PENDLE', cexSymbol:'PENDLEUSDT', chain:'arbitrum' },
   { canonicalId:'usd-coin', symbol:'USDC', cexSymbol:'USDCUSDT', chain:'arbitrum' },
   { canonicalId:'dai', symbol:'DAI', cexSymbol:'DAIUSDT', chain:'arbitrum' },
+
+  // Base — only identities that pass the same Uniswap-list + LI.FI exact-contract agreement enter runtime.
+  { canonicalId:'aave', symbol:'AAVE', cexSymbol:'AAVEUSDT', chain:'base' },
+  { canonicalId:'aerodrome-finance', symbol:'AERO', cexSymbol:'AEROUSDT', chain:'base' },
+  { canonicalId:'virtual-protocol', symbol:'VIRTUAL', cexSymbol:'VIRTUALUSDT', chain:'base' },
+  { canonicalId:'degen-base', symbol:'DEGEN', cexSymbol:'DEGENUSDT', chain:'base' },
+  { canonicalId:'brett', symbol:'BRETT', cexSymbol:'BRETTUSDT', chain:'base' },
+  { canonicalId:'usd-coin', symbol:'USDC', cexSymbol:'USDCUSDT', chain:'base' },
+
+  // Polygon
+  { canonicalId:'aave', symbol:'AAVE', cexSymbol:'AAVEUSDT', chain:'polygon' },
+  { canonicalId:'chainlink', symbol:'LINK', cexSymbol:'LINKUSDT', chain:'polygon' },
+  { canonicalId:'uniswap', symbol:'UNI', cexSymbol:'UNIUSDT', chain:'polygon' },
+  { canonicalId:'the-graph', symbol:'GRT', cexSymbol:'GRTUSDT', chain:'polygon' },
+  { canonicalId:'sushi', symbol:'SUSHI', cexSymbol:'SUSHIUSDT', chain:'polygon' },
+  { canonicalId:'curve-dao-token', symbol:'CRV', cexSymbol:'CRVUSDT', chain:'polygon' },
+  { canonicalId:'usd-coin', symbol:'USDC', cexSymbol:'USDCUSDT', chain:'polygon' },
+  { canonicalId:'dai', symbol:'DAI', cexSymbol:'DAIUSDT', chain:'polygon' },
+
+  // BNB Chain
+  { canonicalId:'chainlink', symbol:'LINK', cexSymbol:'LINKUSDT', chain:'bsc' },
+  { canonicalId:'uniswap', symbol:'UNI', cexSymbol:'UNIUSDT', chain:'bsc' },
+  { canonicalId:'aave', symbol:'AAVE', cexSymbol:'AAVEUSDT', chain:'bsc' },
+  { canonicalId:'the-graph', symbol:'GRT', cexSymbol:'GRTUSDT', chain:'bsc' },
+  { canonicalId:'pancakeswap-token', symbol:'CAKE', cexSymbol:'CAKEUSDT', chain:'bsc' },
+  { canonicalId:'1inch', symbol:'1INCH', cexSymbol:'1INCHUSDT', chain:'bsc' },
+  { canonicalId:'usd-coin', symbol:'USDC', cexSymbol:'USDCUSDT', chain:'bsc' },
 ]);
 
 export function normalizeAddress(address) {
