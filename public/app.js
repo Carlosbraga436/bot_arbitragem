@@ -4,6 +4,9 @@ const state={
   budget:100,
   pollTimer:null,
   lastRadar:null,
+  dexTimer:null,
+  dexBusy:false,
+  lastDexRadar:null,
 };
 
 const $=(id)=>document.getElementById(id);
@@ -50,7 +53,9 @@ function applyStatus(exchange,remote) {
 
 function stopPolling() {
   if (state.pollTimer) clearInterval(state.pollTimer);
+  if (state.dexTimer) clearInterval(state.dexTimer);
   state.pollTimer=null;
+  state.dexTimer=null;
 }
 
 function renderRadar(data) {
@@ -129,6 +134,77 @@ function renderRadar(data) {
     : '<tr><td colspan="5">Nenhum par com dados e liquidez completos neste instante.</td></tr>';
 }
 
+function shortAddress(address) {
+  const value=String(address||'');
+  return value.length>12 ? `${value.slice(0,6)}…${value.slice(-4)}` : value || '—';
+}
+
+function dexVenueLabel(name) {
+  return exchangeLabel(name) !== name ? exchangeLabel(name) : (name || 'DEX');
+}
+
+function renderDexRadar(data) {
+  state.lastDexRadar=data;
+  const positives=Array.isArray(data?.top5)?data.top5:[];
+  const nearest=Array.isArray(data?.nearest5)?data.nearest5:[];
+  const shown=positives.length?positives:nearest;
+  const best=shown[0]||null;
+
+  $('dexSummary').textContent=
+    `${Number(data?.registryAssets||0)} identidades contratuais · `+
+    `${Number(data?.poolsFound||0)} pools válidos · `+
+    `${Number(data?.confirmedCount||0)} rotas confirmadas · `+
+    `${Number(data?.positiveCount||0)} positivas`;
+
+  $('dexTableTitle').textContent=positives.length
+    ? 'Top DEX ↔ CEX confirmadas'
+    : 'DEX ↔ CEX mais próximas do positivo';
+
+  if (best) {
+    const direction=`${dexVenueLabel(best.buyVenue)} → ${dexVenueLabel(best.sellVenue)}`;
+    $('dexBest').innerHTML=`
+      <h2>${best.asset} <span class="${best.eligible?'profit':''}">${money(best.netPnlUsdt)}</span></h2>
+      <div class="heroRoute">${direction}</div>
+      <div class="heroMetrics">
+        <span><small>Spread confirmado</small><b class="${best.eligible?'pos':''}">${Number(best.grossSpreadPct)>=0?'+':''}${fmt(best.grossSpreadPct,3)}%</b></span>
+        <span><small>Rede</small><b>${best.chain}</b></span>
+        <span><small>Contrato</small><b>${shortAddress(best.contract)}</b></span>
+        <span><small>Gas estimado</small><b>${money(-Number(best.gasUsd||0))}</b></span>
+        <span><small>Liquidez pool</small><b>${Number(best.poolLiquidityUsd||0).toLocaleString('pt-BR',{style:'currency',currency:'USD',maximumFractionDigits:0})}</b></span>
+      </div>
+      <p>Identidade: chainId ${best.chainId} + contrato exato + mapeamento CEX explícito. Screening LI.FI: ${best.screeningStatus}. A rota é same-chain e assume inventário pré-posicionado; depósito/saque para rebalanceamento ainda não foi validado.</p>`;
+  } else {
+    $('dexBest').innerHTML='<h2>—</h2><p>Nenhuma rota DEX ↔ CEX confirmou spread suficiente agora. O radar só aceita contrato exato; ticker sozinho nunca é usado como identidade.</p>';
+  }
+
+  $('dexRows').innerHTML=shown.length
+    ? shown.map((r)=>`<tr>
+        <td><b>${r.asset}</b><small class="priceLine">${r.chain} · ${shortAddress(r.contract)}</small></td>
+        <td><b class="routeText">${dexVenueLabel(r.buyVenue)} → ${dexVenueLabel(r.sellVenue)}</b><small class="priceLine">DEX: ${r.dex}</small></td>
+        <td class="${r.eligible?'pos':''}">${Number(r.grossSpreadPct)>=0?'+':''}${fmt(r.grossSpreadPct,3)}%</td>
+        <td class="${r.eligible?'pos':'neg'}">${money(r.netPnlUsdt)}</td>
+        <td>${r.sameAssetVerified?'contrato ✓':'bloqueado'}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="5">Nenhuma rota DEX ↔ CEX confirmada neste ciclo.</td></tr>';
+}
+
+async function fetchDexRadar() {
+  if (state.dexBusy) return;
+  state.dexBusy=true;
+  try {
+    const r=await fetch(`/api/dex-radar?budget=${encodeURIComponent(state.budget)}`,{cache:'no-store'});
+    if (!r.ok) {
+      const body=await r.json().catch(()=>null);
+      throw new Error(body?.message||`DEX radar HTTP ${r.status}`);
+    }
+    renderDexRadar(await r.json());
+  } catch(error) {
+    $('dexSummary').textContent=`DEX beta: ${error.message}`;
+  } finally {
+    state.dexBusy=false;
+  }
+}
+
 async function fetchRadar() {
   const r=await fetch(`/api/radar?budget=${encodeURIComponent(state.budget)}`,{cache:'no-store'});
   if (!r.ok) {
@@ -143,6 +219,8 @@ async function startPolling() {
   state.pollTimer=setInterval(()=>{
     fetchRadar().catch((error)=>console.warn('Falha ao atualizar radar:',error));
   },1000);
+  await fetchDexRadar();
+  state.dexTimer=setInterval(fetchDexRadar,15_000);
 }
 
 async function bootstrap() {
@@ -163,6 +241,7 @@ for (const btn of document.querySelectorAll('[data-budget]')) {
     $('budgetLabel').textContent=state.budget.toLocaleString('pt-BR');
     $('capital').textContent=(state.budget*2).toLocaleString('pt-BR');
     fetchRadar().catch(showFatal);
+    fetchDexRadar();
   });
 }
 
