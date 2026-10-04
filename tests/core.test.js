@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyOrderBookMessage, evaluateAcrossExchanges, evaluatePair, evaluateRoute, topPositive } from '../src/core.js';
-import { AUTO_ASSET_ALLOWLIST, DEX_ASSET_REGISTRY, buildAutoAssetRegistry, exactIdentityKey, mergeAssetRegistries, validateRegistry } from '../src/dex-registry.js';
+import { AUTO_ASSET_ALLOWLIST, DEX_ASSET_REGISTRY, DEX_CHAINS, buildAutoAssetRegistry, exactIdentityKey, mergeAssetRegistries, validateRegistry } from '../src/dex-registry.js';
 import { applyDirectSlippage, decodeV2AmountsOut, directDexAdapterFor, encodeUniswapQuoteExactInputSingle, encodeV2GetAmountsOut } from '../src/dex-direct-quote.js';
 import { capacitySearchBudgets, poolReferenceIsTrusted } from '../src/dex-radar.js';
 import { cexSymbolFormat, depthCapacity } from '../src/cex-depth.js';
@@ -751,4 +751,31 @@ test('matching de rede CEX não aceita substring acidental de ETH', () => {
   assert.equal(chainEntryMatches({chainId:'statemint',chainName:'Asset Hub (Polkadot)'},ethAsset),false);
   assert.equal(chainEntryMatches({chainId:'arbitrum',chainName:'Arbitrum One'},arbAsset),true);
   assert.equal(chainEntryMatches({chainId:'arb',chainName:'Arbitrum'},arbAsset),true);
+});
+
+
+test('CP23 registra novas redes com quote e identidade explícitos', () => {
+  for (const chain of ['base','polygon','bsc']) {
+    const spec=DEX_CHAINS[chain];
+    assert.ok(spec);
+    assert.ok(Number.isInteger(spec.chainId));
+    assert.match(spec.quoteAddress,/^0x[0-9a-fA-F]{40}$/);
+  }
+  assert.ok(AUTO_ASSET_ALLOWLIST.some((x)=>x.chain==='base'));
+  assert.ok(AUTO_ASSET_ALLOWLIST.some((x)=>x.chain==='polygon'));
+  assert.ok(AUTO_ASSET_ALLOWLIST.some((x)=>x.chain==='bsc'));
+});
+
+test('CP23 adapters diretos só habilitam redes com contrato conhecido', () => {
+  assert.equal(directDexAdapterFor('uniswap-v3','base'),'uniswap_v3_quoter');
+  assert.equal(directDexAdapterFor('uniswap-v3','polygon'),'uniswap_v3_quoter');
+  assert.equal(directDexAdapterFor('uniswap-v3','bsc'),null);
+});
+
+test('CP23 aliases CEX das novas redes permanecem exatos', () => {
+  const make=(chain)=>({chain,address:'0x0000000000000000000000000000000000000001',cexSymbol:'TESTUSDT'});
+  assert.equal(chainEntryMatches({chain:'BASE'},make('base')),true);
+  assert.equal(chainEntryMatches({chain:'MATIC'},make('polygon')),true);
+  assert.equal(chainEntryMatches({chain:'BEP20'},make('bsc')),true);
+  assert.equal(chainEntryMatches({chain:'basecamp'},make('base')),false);
 });
