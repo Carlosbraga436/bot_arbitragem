@@ -94,7 +94,7 @@ async function rpc(chainKey, method, params, timeoutMs = 7_000) {
       signal: controller.signal,
       headers: {
         'content-type': 'application/json',
-        'user-agent': 'radar-cripto-carlos-direct-dex/0.22',
+        'user-agent': 'radar-cripto-carlos-direct-dex/0.22.1',
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
