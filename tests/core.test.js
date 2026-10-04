@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyOrderBookMessage, evaluatePair, evaluateRoute, topPositive } from '../src/core.js';
-import { buildCommonUsdtMarkets, chunkTopics, createMarketHub, MAX_MONITORED_SYMBOLS, selectConfirmedSymbols } from '../src/market-hub.js';
+import { applyOrderBookMessage, evaluateAcrossExchanges, evaluatePair, evaluateRoute, topPositive } from '../src/core.js';
+import { BINANCE_DISCOVERY_STREAM, buildCommonUsdtMarkets, buildMultiExchangeUniverse, chunkTopics, createMarketHub, MAX_MONITORED_SYMBOLS, selectConfirmedSymbols, selectDiscoveredBinanceSymbols } from '../src/market-hub.js';
 
 const now = 1_800_000_000_000;
 const book = (bid, ask, qty=1000, ts=now) => ({ bids:[[String(bid),String(qty)]], asks:[[String(ask),String(qty)]], ts });
@@ -23,9 +23,18 @@ test('bloqueia liquidez insuficiente na compra', () => {
   assert.equal(r.eligible,false); assert.equal(r.reason,'insufficient_buy_liquidity');
 });
 
-test('custos transformam spread bruto pequeno em resultado não positivo', () => {
-  const r = evaluateRoute({ symbol:'BTCUSDT', identityConfirmed:true, buyExchange:'binance', sellExchange:'bybit', buyBook:book(99.8,100), sellBook:book(100.4,100.5), budgetUsdt:100, costs, rules, now });
+test('taxas + reserva transformam spread bruto pequeno em resultado de execução não positivo', () => {
+  const r = evaluateRoute({ symbol:'BTCUSDT', identityConfirmed:true, buyExchange:'binance', sellExchange:'bybit', buyBook:book(99.8,100), sellBook:book(100.2,100.3), budgetUsdt:100, costs, rules, now });
   assert.ok(r.grossPnlUsdt > 0); assert.ok(r.netPnlUsdt < 0); assert.equal(r.eligible,false);
+});
+
+test('recomposição é cenário separado e não bloqueia execução positiva', () => {
+  const r = evaluateRoute({ symbol:'BTCUSDT', identityConfirmed:true, buyExchange:'binance', sellExchange:'bybit', buyBook:book(99.8,100), sellBook:book(100.5,100.6), budgetUsdt:100, costs, rules, now });
+  assert.ok(r.executionNetPnlUsdt > 0);
+  assert.ok(r.netAfterRebalanceUsdt < 0);
+  assert.equal(r.netPnlUsdt, r.executionNetPnlUsdt);
+  assert.equal(r.eligible,true);
+  assert.equal(r.eligibilityModel,'execution_net_before_rebalance');
 });
 
 test('spread suficiente gera resultado líquido positivo', () => {
@@ -102,9 +111,15 @@ test('catálogo dinâmico mantém somente par USDT ativo e idêntico nas duas ex
   assert.equal(markets[0].identityConfirmed, true);
 });
 
-test('teto amplo de monitoramento permanece abaixo de mil streams', () => {
-  assert.ok(MAX_MONITORED_SYMBOLS > 100);
-  assert.ok(MAX_MONITORED_SYMBOLS <= 1000);
+test('teto amplo cobre mais de dois mil candidatos sem assinar símbolos inválidos na Binance', () => {
+  assert.ok(MAX_MONITORED_SYMBOLS >= 2000);
+  assert.equal(BINANCE_DISCOVERY_STREAM,'!miniTicker@arr');
+  const monitored=['BTCUSDT','ETHUSDT','ONLYOTHERUSDT'];
+  const discovered=selectDiscoveredBinanceSymbols(
+    [{s:'BTCUSDT'},{s:'ETHUSDT'},{s:'BNBBTC'},{s:'NOTMONITOREDUSDT'}],
+    monitored,
+  );
+  assert.deepEqual(discovered,['BTCUSDT','ETHUSDT']);
 });
 
 
@@ -118,4 +133,326 @@ test('modo hospedado usa universo Bybit e exige confirmação live implícita pe
   });
   assert.deepEqual(markets.map((x)=>x.symbol), ['ABCUSDT','XYZUSDT']);
   assert.equal(markets[0].identityMethod, 'bybit_catalog+exact_symbol_live_probe_on_binance');
+});
+
+
+test('evaluateAcrossExchanges escolhe a melhor rota entre quatro exchanges', () => {
+  const multiCosts = {
+    exchangeFeePct:{binance:0.1,bybit:0.1,okx:0.1,gate:0.1},
+    reservePct:0.05,
+    recompositionUsdt:0.5,
+  };
+  const r = evaluateAcrossExchanges({
+    symbol:'ABCUSDT',
+    identityConfirmed:true,
+    booksByExchange:{
+      binance:book(99.9,100),
+      bybit:book(101.0,101.1),
+      okx:book(100.4,100.5),
+      gate:book(101.5,101.6),
+    },
+    budgetUsdt:100,
+    costs:multiCosts,
+    rules,
+    now,
+  });
+  assert.equal(r.buyExchange,'binance');
+  assert.equal(r.sellExchange,'gate');
+  assert.ok(r.netPnlUsdt > 0);
+});
+
+test('taxa específica da OKX é aplicada à rota', () => {
+  const multiCosts = {
+    exchangeFeePct:{binance:0.1,bybit:0.1,okx:0.1,gate:0.1},
+    reservePct:0,
+    recompositionUsdt:0,
+  };
+  const r = evaluateRoute({
+    symbol:'ABCUSDT',
+    identityConfirmed:true,
+    buyExchange:'okx',
+    sellExchange:'gate',
+    buyBook:book(99.9,100),
+    sellBook:book(101,101.1),
+    budgetUsdt:100,
+    costs:multiCosts,
+    rules,
+    now,
+  });
+  assert.ok(r.tradingFeesUsdt > 0.19 && r.tradingFeesUsdt < 0.21);
+});
+
+test('universo multiexchange une pares USDT ativos sem duplicar símbolo', () => {
+  const markets = buildMultiExchangeUniverse({
+    bybitSymbols:[
+      {symbol:'BTCUSDT',baseCoin:'BTC',quoteCoin:'USDT',status:'Trading'},
+      {symbol:'SOLUSDT',baseCoin:'SOL',quoteCoin:'USDT',status:'Trading'},
+    ],
+    okxSymbols:[
+      {instId:'BTC-USDT',baseCcy:'BTC',quoteCcy:'USDT',state:'live'},
+      {instId:'ETH-USDT',baseCcy:'ETH',quoteCcy:'USDT',state:'live'},
+    ],
+    gateSymbols:[
+      {id:'BTC_USDT',base:'BTC',quote:'USDT',trade_status:'tradable'},
+      {id:'XRP_USDT',base:'XRP',quote:'USDT',trade_status:'tradable'},
+    ],
+  });
+  assert.deepEqual(markets.map((x)=>x.symbol), ['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT']);
+  const btc = markets.find((x)=>x.symbol==='BTCUSDT');
+  assert.equal(btc.catalogVenueCount,3);
+  assert.equal(btc.venues.bybit,true);
+  assert.equal(btc.venues.okx,true);
+  assert.equal(btc.venues.gate,true);
+});
+
+test('market hub seguro expõe as cinco exchanges antes de iniciar', () => {
+  const hub = createMarketHub({ symbols:['BTCUSDT'], gateSymbols:['BTCUSDT'], logger:{info(){},warn(){}} });
+  const snap = hub.snapshot();
+  assert.deepEqual(Object.keys(snap.status), ['binance','bybit','okx','gate','kucoin']);
+  assert.deepEqual(Object.keys(snap.books), ['binance','bybit','okx','gate','kucoin']);
+  assert.equal(snap.status.okx.state,'idle');
+  assert.equal(snap.status.gate.state,'idle');
+  assert.equal(snap.status.kucoin.state,'idle');
+});
+
+
+test('bloqueia dislocação extrema não validada antes do Top 5', () => {
+  const r = evaluateRoute({
+    symbol:'ONEUSDT',
+    identityConfirmed:true,
+    buyExchange:'gate',
+    sellExchange:'binance',
+    buyBook:book(1.0,1.0,1000),
+    sellBook:book(1.4,1.41,1000),
+    budgetUsdt:100,
+    costs:{
+      exchangeFeePct:{gate:0.1,binance:0.1},
+      reservePct:0.05,
+      recompositionUsdt:0.5,
+    },
+    rules:{...rules,maxUnverifiedGrossSpreadPct:10},
+    now,
+  });
+  assert.equal(r.eligible,false);
+  assert.equal(r.reason,'price_anomaly_unverified');
+  assert.ok(r.grossSpreadPct > 10);
+});
+
+
+test('consenso de 3+ exchanges remove venue isolada com preço divergente', () => {
+  const r = evaluateAcrossExchanges({
+    symbol:'ZILUSDT',
+    identityConfirmed:true,
+    booksByExchange:{
+      binance:book(0.00349,0.00350,100000),
+      bybit:book(0.00348,0.00349,100000),
+      okx:book(0.00318,0.00319,100000),
+      gate:book(0.00350,0.00351,100000),
+    },
+    budgetUsdt:100,
+    costs:{
+      exchangeFeePct:{binance:0.1,bybit:0.1,okx:0.1,gate:0.1},
+      reservePct:0.05,
+      recompositionUsdt:0.5,
+    },
+    rules:{...rules,maxVenueDeviationPct:3,maxUnverifiedGrossSpreadPct:10},
+    now,
+  });
+  assert.notEqual(r.buyExchange,'okx');
+});
+
+test('consenso não bloqueia rota normal entre venues alinhadas', () => {
+  const r = evaluateAcrossExchanges({
+    symbol:'ABCUSDT',
+    identityConfirmed:true,
+    booksByExchange:{
+      binance:book(99.9,100),
+      bybit:book(100.8,100.9),
+      okx:book(100.2,100.3),
+    },
+    budgetUsdt:100,
+    costs:{
+      exchangeFeePct:{binance:0.1,bybit:0.1,okx:0.1},
+      reservePct:0.05,
+      recompositionUsdt:0.5,
+    },
+    rules:{...rules,maxVenueDeviationPct:3,maxUnverifiedGrossSpreadPct:10},
+    now,
+  });
+  assert.equal(r.buyExchange,'binance');
+  assert.equal(r.sellExchange,'bybit');
+});
+
+
+test('universo multiexchange inclui KuCoin e deriva taxa VIP0 por classe do par', () => {
+  const markets = buildMultiExchangeUniverse({
+    kucoinSymbols:[
+      {
+        symbol:'BTC-USDT',
+        baseCurrency:'BTC',
+        quoteCurrency:'USDT',
+        tradingStatus:'TradingEnabled',
+        feeCategory:'classA',
+        takerFeeCoefficient:'1.00',
+      },
+      {
+        symbol:'ABC-USDT',
+        baseCurrency:'ABC',
+        quoteCurrency:'USDT',
+        tradingStatus:'TradingEnabled',
+        feeCategory:'classC',
+        takerFeeCoefficient:'1.00',
+      },
+    ],
+  });
+  const btc = markets.find((x)=>x.symbol==='BTCUSDT');
+  const abc = markets.find((x)=>x.symbol==='ABCUSDT');
+  assert.equal(btc.venues.kucoin,true);
+  assert.equal(btc.feePctByExchange.kucoin,0.10);
+  assert.equal(abc.feePctByExchange.kucoin,0.30);
+});
+
+test('rota KuCoin usa taxa específica do par quando fornecida', () => {
+  const r = evaluateAcrossExchanges({
+    symbol:'ABCUSDT',
+    identityConfirmed:true,
+    booksByExchange:{
+      kucoin:book(99.9,100),
+      gate:book(101.0,101.1),
+    },
+    budgetUsdt:100,
+    costs:{
+      exchangeFeePct:{kucoin:0.30,gate:0.10},
+      reservePct:0.05,
+      recompositionUsdt:0.5,
+    },
+    rules,
+    now,
+  });
+  assert.equal(r.buyExchange,'kucoin');
+  assert.equal(r.sellExchange,'gate');
+  assert.ok(r.tradingFeesUsdt > 0.39);
+});
+
+
+test('catálogo não sobrescreve taxa padrão com zero quando feePct é null', () => {
+  const markets = buildMultiExchangeUniverse({
+    bybitSymbols:[
+      {symbol:'BTCUSDT',baseCoin:'BTC',quoteCoin:'USDT',status:'Trading'},
+    ],
+    okxSymbols:[
+      {instId:'BTC-USDT',baseCcy:'BTC',quoteCcy:'USDT',state:'live'},
+    ],
+    gateSymbols:[
+      {id:'BTC_USDT',base:'BTC',quote:'USDT',trade_status:'tradable'},
+    ],
+  });
+  const btc = markets.find((x)=>x.symbol==='BTCUSDT');
+  assert.deepEqual(btc.feePctByExchange,{});
+});
+
+test('custos padrão multiexchange continuam aplicados quando catálogo não informa fee específica', () => {
+  const r = evaluateAcrossExchanges({
+    symbol:'BTCUSDT',
+    identityConfirmed:true,
+    booksByExchange:{
+      bybit:book(99.9,100),
+      okx:book(100.1,100.2),
+    },
+    budgetUsdt:100,
+    costs:{
+      exchangeFeePct:{bybit:0.10,okx:0.10},
+      reservePct:0.05,
+      recompositionUsdt:0.50,
+    },
+    rules,
+    now,
+  });
+  assert.ok(r.tradingFeesUsdt > 0.19 && r.tradingFeesUsdt < 0.21);
+  assert.ok(r.executionNetPnlUsdt < 0);
+  assert.equal(r.eligible,false);
+});
+
+
+test('OKX USDT usa taker regular de 0,10% no modelo atual', () => {
+  const r = evaluateRoute({
+    symbol:'ETHUSDT',
+    identityConfirmed:true,
+    buyExchange:'bybit',
+    sellExchange:'okx',
+    buyBook:book(99.9,100),
+    sellBook:book(100.5,100.6),
+    budgetUsdt:100,
+    costs:{
+      exchangeFeePct:{bybit:0.10,okx:0.10},
+      reservePct:0.05,
+      recompositionUsdt:0.50,
+    },
+    rules,
+    now,
+  });
+  assert.ok(r.tradingFeesUsdt > 0.19 && r.tradingFeesUsdt < 0.21);
+});
+
+
+test('capital selecionado funciona como teto e preserva oportunidade parcialmente executável', () => {
+  const maximumRules = { ...rules, budgetMode:'maximum' };
+  const limitedBookBuy = book(99.9,100,1);
+  const limitedBookSell = book(101.5,101.6,1);
+
+  const r500 = evaluateRoute({
+    symbol:'CAPUSDT',
+    identityConfirmed:true,
+    buyExchange:'binance',
+    sellExchange:'bybit',
+    buyBook:limitedBookBuy,
+    sellBook:limitedBookSell,
+    budgetUsdt:500,
+    costs,
+    rules:maximumRules,
+    now,
+  });
+
+  assert.equal(r500.eligible,true);
+  assert.equal(r500.requestedBudgetUsdt,500);
+  assert.equal(r500.executableBudgetUsdt,100);
+  assert.equal(r500.budgetUsdt,100);
+  assert.equal(r500.liquidityLimited,true);
+  assert.equal(r500.executionSharePct,20);
+
+  const r1000 = evaluateRoute({
+    symbol:'CAPUSDT',
+    identityConfirmed:true,
+    buyExchange:'binance',
+    sellExchange:'bybit',
+    buyBook:limitedBookBuy,
+    sellBook:limitedBookSell,
+    budgetUsdt:1000,
+    costs,
+    rules:maximumRules,
+    now,
+  });
+
+  assert.equal(r1000.eligible,true);
+  assert.equal(r1000.executableBudgetUsdt,100);
+  assert.equal(r1000.liquidityLimited,true);
+  assert.equal(r1000.executionSharePct,10);
+});
+
+test('modo exato antigo continua disponível para regressão', () => {
+  const exactRules = { ...rules, budgetMode:'exact' };
+  const r = evaluateRoute({
+    symbol:'CAPUSDT',
+    identityConfirmed:true,
+    buyExchange:'binance',
+    sellExchange:'bybit',
+    buyBook:book(99.9,100,1),
+    sellBook:book(101.5,101.6,1),
+    budgetUsdt:500,
+    costs,
+    rules:exactRules,
+    now,
+  });
+  assert.equal(r.eligible,false);
+  assert.equal(r.reason,'insufficient_buy_liquidity');
 });

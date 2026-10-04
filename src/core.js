@@ -1,6 +1,16 @@
 export const DEFAULT_COSTS = Object.freeze({
+  exchangeFeePct: Object.freeze({
+    binance: 0.10,
+    bybit: 0.10,
+    okx: 0.10,
+    gate: 0.10,
+    kucoin: 0.30,
+  }),
   binanceFeePct: 0.10,
   bybitFeePct: 0.10,
+  okxFeePct: 0.10,
+  gateFeePct: 0.10,
+  kucoinFeePct: 0.30,
   reservePct: 0.05,
   recompositionUsdt: 0.50,
 });
@@ -9,6 +19,9 @@ export const DEFAULT_RULES = Object.freeze({
   maxAgeMs: 5_000,
   maxSkewMs: 2_000,
   minBudgetFillPct: 100,
+  budgetMode: 'maximum',
+  maxUnverifiedGrossSpreadPct: 5,
+  maxVenueDeviationPct: 3,
 });
 
 export function finitePositive(value) {
@@ -111,9 +124,63 @@ export function consumeBase(bids, baseQty) {
   };
 }
 
+export function quoteCostForBase(asks, baseTarget) {
+  let baseLeft = finitePositive(baseTarget);
+  if (!baseLeft) return null;
+  let baseBought = 0;
+  let quoteSpent = 0;
+
+  for (const [price, qty] of asks) {
+    const takeBase = Math.min(baseLeft, qty);
+    baseBought += takeBase;
+    quoteSpent += takeBase * price;
+    baseLeft -= takeBase;
+    if (baseLeft <= 1e-12) break;
+  }
+
+  return {
+    filled: baseLeft <= 1e-12,
+    baseBought,
+    quoteSpent,
+    vwap: baseBought > 0 ? quoteSpent / baseBought : null,
+  };
+}
+
+export function visibleExecutableBudget(buyBook, sellBook, requestedBudgetUsdt) {
+  const buy = normalizeBook(buyBook);
+  const sell = normalizeBook(sellBook);
+  const requested = finitePositive(requestedBudgetUsdt);
+  if (!buy || !sell || !requested) return null;
+
+  const buyBaseCapacity = buy.asks.reduce((sum, [, qty]) => sum + qty, 0);
+  const sellBaseCapacity = sell.bids.reduce((sum, [, qty]) => sum + qty, 0);
+  const executableBase = Math.min(buyBaseCapacity, sellBaseCapacity);
+  if (!(executableBase > 0)) return null;
+
+  const capacity = quoteCostForBase(buy.asks, executableBase);
+  if (!capacity?.filled || !(capacity.quoteSpent > 0)) return null;
+
+  const executableBudgetUsdt = Math.min(requested, capacity.quoteSpent);
+  return {
+    requestedBudgetUsdt: requested,
+    executableBudgetUsdt,
+    visibleCapacityUsdt: capacity.quoteSpent,
+    liquidityLimited: executableBudgetUsdt + 1e-9 < requested,
+    executionSharePct: (executableBudgetUsdt / requested) * 100,
+  };
+}
+
 function pctToRate(pct) {
   const n = Number(pct);
   return Number.isFinite(n) && n >= 0 ? n / 100 : 0;
+}
+
+export function exchangeFeePct(exchange, costs = DEFAULT_COSTS) {
+  const mapped = Number(costs?.exchangeFeePct?.[exchange]);
+  if (Number.isFinite(mapped) && mapped >= 0) return mapped;
+  const legacy = Number(costs?.[`${exchange}FeePct`]);
+  if (Number.isFinite(legacy) && legacy >= 0) return legacy;
+  return 0;
 }
 
 export function evaluateRoute({
@@ -133,8 +200,8 @@ export function evaluateRoute({
 
   const buy = normalizeBook(buyBook);
   const sell = normalizeBook(sellBook);
-  const budget = finitePositive(budgetUsdt);
-  if (!buy || !sell || !budget) return { eligible: false, reason: 'invalid_data', symbol };
+  const requestedBudget = finitePositive(budgetUsdt);
+  if (!buy || !sell || !requestedBudget) return { eligible: false, reason: 'invalid_data', symbol };
 
   const buyAgeMs = now - buy.ts;
   const sellAgeMs = now - sell.ts;
@@ -144,9 +211,31 @@ export function evaluateRoute({
   }
   if (skewMs > rules.maxSkewMs) return { eligible: false, reason: 'desynced_data', symbol, skewMs };
 
+  const flexibleBudget = rules?.budgetMode === 'maximum'
+    ? visibleExecutableBudget(buy, sell, requestedBudget)
+    : {
+        requestedBudgetUsdt: requestedBudget,
+        executableBudgetUsdt: requestedBudget,
+        visibleCapacityUsdt: null,
+        liquidityLimited: false,
+        executionSharePct: 100,
+      };
+
+  const budget = flexibleBudget?.executableBudgetUsdt;
+  if (!finitePositive(budget)) {
+    return { eligible: false, reason: 'insufficient_buy_liquidity', symbol, fillPct: 0 };
+  }
+
   const bought = consumeQuote(buy.asks, budget);
   if (!bought?.filled || bought.fillPct < rules.minBudgetFillPct) {
-    return { eligible: false, reason: 'insufficient_buy_liquidity', symbol, fillPct: bought?.fillPct ?? 0 };
+    return {
+      eligible: false,
+      reason: 'insufficient_buy_liquidity',
+      symbol,
+      fillPct: bought?.fillPct ?? 0,
+      requestedBudgetUsdt: requestedBudget,
+      executableBudgetUsdt: budget,
+    };
   }
 
   const sold = consumeBase(sell.bids, bought.baseQty);
@@ -154,45 +243,168 @@ export function evaluateRoute({
     return { eligible: false, reason: 'insufficient_sell_liquidity', symbol, fillPct: sold?.fillPct ?? 0 };
   }
 
-  const buyFeeRate = pctToRate(buyExchange === 'binance' ? costs.binanceFeePct : costs.bybitFeePct);
-  const sellFeeRate = pctToRate(sellExchange === 'binance' ? costs.binanceFeePct : costs.bybitFeePct);
+  const buyFeeRate = pctToRate(exchangeFeePct(buyExchange, costs));
+  const sellFeeRate = pctToRate(exchangeFeePct(sellExchange, costs));
   const reserveRate = pctToRate(costs.reservePct);
   const grossPnl = sold.quoteReceived - bought.quoteSpent;
-  const tradingFees = bought.quoteSpent * buyFeeRate + sold.quoteReceived * sellFeeRate;
+  const grossSpreadPct = (grossPnl / bought.quoteSpent) * 100;
+  const maxUnverifiedGrossSpreadPct = finitePositive(rules.maxUnverifiedGrossSpreadPct);
+  if (maxUnverifiedGrossSpreadPct && grossSpreadPct > maxUnverifiedGrossSpreadPct) {
+    return {
+      eligible: false,
+      reason: 'price_anomaly_unverified',
+      symbol,
+      buyExchange,
+      sellExchange,
+      budgetUsdt: budget,
+      requestedBudgetUsdt: requestedBudget,
+      executableBudgetUsdt: budget,
+      visibleCapacityUsdt: flexibleBudget?.visibleCapacityUsdt ?? null,
+      liquidityLimited: Boolean(flexibleBudget?.liquidityLimited),
+      executionSharePct: flexibleBudget?.executionSharePct ?? 100,
+      baseQty: bought.baseQty,
+      buyVwap: bought.vwap,
+      sellVwap: sold.vwap,
+      grossPnlUsdt: grossPnl,
+      grossSpreadPct,
+      buyAgeMs,
+      sellAgeMs,
+      skewMs,
+    };
+  }
+
+  const buyTradingFee = bought.quoteSpent * buyFeeRate;
+  const sellTradingFee = sold.quoteReceived * sellFeeRate;
+  const tradingFees = buyTradingFee + sellTradingFee;
   const reserve = (bought.quoteSpent + sold.quoteReceived) * reserveRate;
   const recomposition = Math.max(0, Number(costs.recompositionUsdt) || 0);
-  const netPnl = grossPnl - tradingFees - reserve - recomposition;
+
+  // Eligibility is based on the economics of the trade that can be executed now.
+  // Inventory rebalancing is operational and can be batched across multiple trades,
+  // so its estimate is reported separately instead of blocking every individual trade.
+  const executionNetPnl = grossPnl - tradingFees - reserve;
+  const netAfterRebalance = executionNetPnl - recomposition;
   const totalCapital = budget * 2;
 
   return {
-    eligible: netPnl > 0,
-    reason: netPnl > 0 ? 'positive_net' : 'non_positive_net',
+    eligible: executionNetPnl > 0,
+    reason: executionNetPnl > 0 ? 'positive_net' : 'non_positive_net',
     symbol,
     buyExchange,
     sellExchange,
     budgetUsdt: budget,
+    requestedBudgetUsdt: requestedBudget,
+    executableBudgetUsdt: budget,
+    visibleCapacityUsdt: flexibleBudget?.visibleCapacityUsdt ?? null,
+    liquidityLimited: Boolean(flexibleBudget?.liquidityLimited),
+    executionSharePct: flexibleBudget?.executionSharePct ?? 100,
     baseQty: bought.baseQty,
     buyVwap: bought.vwap,
     sellVwap: sold.vwap,
     grossPnlUsdt: grossPnl,
+    grossSpreadPct,
+    buyFeePct: exchangeFeePct(buyExchange, costs),
+    sellFeePct: exchangeFeePct(sellExchange, costs),
+    buyTradingFeeUsdt: buyTradingFee,
+    sellTradingFeeUsdt: sellTradingFee,
     tradingFeesUsdt: tradingFees,
     reserveUsdt: reserve,
     recompositionUsdt: recomposition,
-    netPnlUsdt: netPnl,
-    netPctOnBuy: (netPnl / budget) * 100,
-    roiOnTotalCapitalPct: (netPnl / totalCapital) * 100,
+    executionNetPnlUsdt: executionNetPnl,
+    netAfterRebalanceUsdt: netAfterRebalance,
+    netPnlUsdt: executionNetPnl,
+    netPctOnBuy: (executionNetPnl / budget) * 100,
+    roiOnTotalCapitalPct: (executionNetPnl / totalCapital) * 100,
+    eligibilityModel: 'execution_net_before_rebalance',
     buyAgeMs,
     sellAgeMs,
     skewMs,
   };
 }
 
+export function evaluateAcrossExchanges({
+  symbol,
+  identityConfirmed,
+  booksByExchange = {},
+  budgetUsdt,
+  costs = DEFAULT_COSTS,
+  rules = DEFAULT_RULES,
+  now = Date.now(),
+}) {
+  let entries = Object.entries(booksByExchange).filter(([, book]) => book);
+  if (entries.length < 2) return { eligible:false, reason:'invalid_data', symbol };
+
+  const normalized = entries
+    .map(([exchange, book]) => [exchange, normalizeBook(book)])
+    .filter(([, book]) => book);
+
+  if (normalized.length < 2) return { eligible:false, reason:'invalid_data', symbol };
+
+  if (normalized.length >= 3) {
+    const mids = normalized
+      .map(([, book]) => (book.bids[0][0] + book.asks[0][0]) / 2)
+      .sort((a,b)=>a-b);
+    const midIndex = Math.floor(mids.length / 2);
+    const median = mids.length % 2
+      ? mids[midIndex]
+      : (mids[midIndex - 1] + mids[midIndex]) / 2;
+    const maxDeviationPct = finitePositive(rules.maxVenueDeviationPct);
+
+    if (maxDeviationPct) {
+      const accepted = new Set(
+        normalized
+          .filter(([, book]) => {
+            const mid = (book.bids[0][0] + book.asks[0][0]) / 2;
+            return Math.abs((mid / median - 1) * 100) <= maxDeviationPct;
+          })
+          .map(([exchange]) => exchange)
+      );
+      entries = entries.filter(([exchange]) => accepted.has(exchange));
+      if (entries.length < 2) {
+        return {
+          eligible:false,
+          reason:'price_consensus_failed',
+          symbol,
+          venueCount:normalized.length,
+          medianMid:median,
+        };
+      }
+    }
+  }
+
+  const routes = [];
+  for (const [buyExchange, buyBook] of entries) {
+    for (const [sellExchange, sellBook] of entries) {
+      if (buyExchange === sellExchange) continue;
+      routes.push(evaluateRoute({
+        symbol,
+        identityConfirmed,
+        buyExchange,
+        sellExchange,
+        buyBook,
+        sellBook,
+        budgetUsdt,
+        costs,
+        rules,
+        now,
+      }));
+    }
+  }
+
+  return routes.sort((a, b) => (b.netPnlUsdt ?? -Infinity) - (a.netPnlUsdt ?? -Infinity))[0]
+    || { eligible:false, reason:'invalid_data', symbol };
+}
+
 export function evaluatePair({ symbol, identityConfirmed, binanceBook, bybitBook, budgetUsdt, costs, rules, now }) {
-  const routes = [
-    evaluateRoute({ symbol, identityConfirmed, buyExchange: 'binance', sellExchange: 'bybit', buyBook: binanceBook, sellBook: bybitBook, budgetUsdt, costs, rules, now }),
-    evaluateRoute({ symbol, identityConfirmed, buyExchange: 'bybit', sellExchange: 'binance', buyBook: bybitBook, sellBook: binanceBook, budgetUsdt, costs, rules, now }),
-  ];
-  return routes.sort((a, b) => (b.netPnlUsdt ?? -Infinity) - (a.netPnlUsdt ?? -Infinity))[0];
+  return evaluateAcrossExchanges({
+    symbol,
+    identityConfirmed,
+    booksByExchange: { binance: binanceBook, bybit: bybitBook },
+    budgetUsdt,
+    costs,
+    rules,
+    now,
+  });
 }
 
 export function topPositive(results, limit = 5) {
