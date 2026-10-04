@@ -216,6 +216,7 @@ async function ensureRuntime() {
             poolsFound:dex.poolsFound,
             lifiDexTools:dex.lifiDexTools,
             preliminaryCount:dex.preliminaryCount,
+            preliminaryTop5:dex.preliminaryTop5,
             confirmedCount:dex.confirmedCount,
             positiveCount:dex.positiveCount,
             top5:dex.top5,
