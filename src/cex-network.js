@@ -10,12 +10,12 @@ function normalizedLabel(value) {
 function chainAliases(asset) {
   const chain=chainForAsset(asset);
   if (!chain) return [];
-  if (chain.chainId===1) return ['eth','ethereum','erc20'];
-  if (chain.chainId===42161) return ['arb','arbitrum','arbitrumone'];
+  if (chain.chainId===1) return ['eth','ethereum','erc20','etherc20','ethereumerc20'];
+  if (chain.chainId===42161) return ['arb','arbitrum','arbitrumone','arbitrumonearb'];
   return [normalizedLabel(chain.name)];
 }
 
-function chainEntryMatches(entry, asset) {
+export function chainEntryMatches(entry, asset) {
   const aliases=chainAliases(asset).map(normalizedLabel);
   const values=[
     entry?.chainId,
@@ -23,7 +23,11 @@ function chainEntryMatches(entry, asset) {
     entry?.chainName,
     entry?.name,
   ].map(normalizedLabel).filter(Boolean);
-  return aliases.some((alias)=>values.some((value)=>value===alias || value.includes(alias) || alias.includes(value)));
+
+  // Network labels must match an explicit normalized alias. Substring matching
+  // is unsafe: e.g. "Asset Hub (Polkadot)" contains the letters "eth" across
+  // "asset hub" and was previously misclassified as Ethereum.
+  return aliases.some((alias)=>values.some((value)=>value===alias));
 }
 
 function contractVerification(entry, asset) {
@@ -57,7 +61,7 @@ async function fetchJson(url, timeoutMs=6000) {
   try {
     const r=await fetch(url,{
       signal:controller.signal,
-      headers:{'user-agent':'radar-cripto-carlos-network/0.21.2'},
+      headers:{'user-agent':'radar-cripto-carlos-network/0.22.1'},
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return await r.json();
