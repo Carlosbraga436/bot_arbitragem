@@ -164,7 +164,8 @@ function renderDexRadar(data) {
   if (funnelEl) {
     const steps=[
       ['Identidades',funnel.identities],
-      ['Pool líquido',funnel.withLiquidPool],
+      ['Ativos c/ pool',funnel.withLiquidPool],
+      ['Pools varridos',funnel.selectedPools],
       ['CEX comparável',funnel.cexComparable],
       ['Spread ≥ 0,25%',funnel.preliminaryRoutes],
       ['Forte ≥ 0,50%',funnel.strongRoutes],
@@ -184,9 +185,13 @@ function renderDexRadar(data) {
       reasons.rebalanceUnverified?`${reasons.rebalanceUnverified} rebalance não verificável`:null,
     ].filter(Boolean).join(' · ');
 
+    const coverage=Object.values(data?.coverageByChain||{})
+      .filter((x)=>Number(x?.identities||0)>0)
+      .map((x)=>`${x.name}: ${Number(x.identities||0)} ativos / ${Number(x.pools||0)} pools / ${Number(x.preliminary||0)} sinais`)
+      .join(' · ');
     funnelEl.innerHTML=`<div class="funnelSteps">${steps.map(([label,value],i)=>
       `<div class="funnelStep"><small>${label}</small><b>${Number(value||0).toLocaleString('pt-BR')}</b></div>${i<steps.length-1?'<span class="funnelArrow">→</span>':''}`
-    ).join('')}</div><div class="funnelReasons">${reasonText||'Nenhum descarte relevante neste ciclo.'}</div>`;
+    ).join('')}</div><div class="funnelReasons">${reasonText||'Nenhum descarte relevante neste ciclo.'}${coverage?`<br><b>Cobertura:</b> ${coverage}`:''}</div>`;
   }
   $('dexTableTitle').textContent=positives.length
     ? 'Top DEX ↔ CEX confirmadas'
