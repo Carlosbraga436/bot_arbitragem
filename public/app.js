@@ -177,12 +177,13 @@ function renderDexRadar(data) {
         <span><small>Depth CEX</small><b>${best.depthConfirmed?`${best.cexDepthLevels||0} níveis ✓`:'—'}</b></span>
         <span><small>Rede</small><b>${best.chain}</b></span>
         <span><small>Contrato DEX</small><b>${shortAddress(best.contract)}</b></span>
-        <span><small>Contrato na CEX</small><b>${best.cexContractVerified===true?'match exato ✓':(best.cexContractVerified===false?'DIVERGENTE':'não público')}</b></span>
-        <span><small>Rebalance</small><b>${best.rebalanceStatus==='verified_open'?'rede + contrato ✓':(best.rebalanceStatus==='restricted'?'RESTRITA':'não verificado')}</b></span>
+        <span><small>Token na CEX</small><b>${best.cexContractVerified===true?'match exato ✓':(best.cexContractVerified===false?'DIVERGENTE':'não público')}</b></span>
+        <span><small>USDT na CEX</small><b>${best.quoteContractVerified===true?'match exato ✓':(best.quoteContractVerified===false?'DIVERGENTE':'não público')}</b></span>
+        <span><small>Rebalance</small><b>${best.rebalanceStatus==='verified_open'?'2 pernas ✓':(best.rebalanceStatus==='restricted'?'RESTRITA':'não verificado')}</b></span>
         <span><small>Gas estimado</small><b>${confirmed?money(-Number(best.gasUsd||0)):'—'}</b></span>
         <span><small>Liquidez pool</small><b>${Number(best.poolLiquidityUsd||0).toLocaleString('pt-BR',{style:'currency',currency:'USD',maximumFractionDigits:0})}</b></span>
       </div>
-      <p>Identidade DEX: chainId ${best.chainId} + contrato exato. O símbolo da CEX é mapeado manualmente e nunca inferido só pelo ticker. ${confirmed?`Screening LI.FI: ${best.screeningStatus}. Order book da CEX confirmado em múltiplos níveis.`:'Quote executável ainda não confirmado — não usar esta linha para executar.'} ${best.knownNetworkRestriction?'A rede/contrato público da CEX divergiu ou está restrito e a rota foi bloqueada.':(best.transferabilityVerified?'A CEX expôs publicamente a mesma rede, o contrato exato e depósito/saque abertos.':'Quando a CEX não expõe o contrato/rede publicamente, o radar marca a rota como não verificada para rebalanceamento, sem fingir garantia.')} A execução continua em modo read-only.</p>`;
+      <p>Identidade DEX: chainId ${best.chainId} + contrato exato. O símbolo da CEX é mapeado manualmente e nunca inferido só pelo ticker. ${confirmed?`Screening LI.FI: ${best.screeningStatus}. Order book da CEX confirmado em múltiplos níveis.`:'Quote executável ainda não confirmado — não usar esta linha para executar.'} ${best.knownNetworkRestriction?'Uma das pernas necessárias ao rebalanceamento token/USDT está publicamente restrita ou divergente e a rota foi bloqueada.':(best.transferabilityVerified?'As duas pernas direcionais do rebalanceamento foram verificadas publicamente na mesma rede e com contratos compatíveis.':'Quando a CEX não expõe todos os dados públicos de token e USDT, o radar mantém o rebalanceamento como não verificado, sem fingir garantia.')} A execução continua em modo read-only.</p>`;
   } else {
     $('dexBest').innerHTML='<h2>—</h2><p>Nenhuma rota DEX ↔ CEX detectada neste ciclo. O radar só aceita contrato exato; ticker sozinho nunca é usado como identidade.</p>';
   }
@@ -198,7 +199,7 @@ function renderDexRadar(data) {
         <td class="${r.eligible?'pos':'neg'}">${confirmed?money(r.netPnlUsdt):'aguardando quote'}</td>
         <td>${r.sameAssetVerified
           ? (confirmed
-              ? `DEX contrato ✓ · CEX ${r.cexContractVerified===true?'contrato ✓':(r.cexContractVerified===false?'contrato ≠':'contrato ?')} · depth ${r.depthConfirmed?'✓':'—'} · ${r.rebalanceStatus==='verified_open'?'rede ✓':(r.rebalanceStatus==='restricted'?'rede restrita':'rede ?')}`
+              ? `DEX contrato ✓ · token CEX ${r.cexContractVerified===true?'✓':(r.cexContractVerified===false?'≠':'?')} · USDT CEX ${r.quoteContractVerified===true?'✓':(r.quoteContractVerified===false?'≠':'?')} · depth ${r.depthConfirmed?'✓':'—'} · ${r.rebalanceStatus==='verified_open'?'rebalance 2/2 ✓':(r.rebalanceStatus==='restricted'?'rebalance restrito':'rebalance ?')}`
               : 'DEX contrato ✓ · CEX ainda não confirmada')
           : 'bloqueado'}</td>
       </tr>`;
