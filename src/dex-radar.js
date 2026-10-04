@@ -1,6 +1,7 @@
 import { consumeBase, consumeQuote, exchangeFeePct } from './core.js';
 import {
   CURATED_DEX_NAMES,
+  CURATED_DEX_ID_ALIASES,
   DEX_ASSET_REGISTRY,
   chainForAsset,
   exactIdentityKey,
@@ -136,12 +137,10 @@ async function refreshTools() {
   if (Date.now() - state.toolsFetchedAt < TOOL_CACHE_MS && state.toolKeys.length) return;
   const data = await fetchJson(`${LIFI_BASE}/tools`);
   const exchanges = Array.isArray(data?.exchanges) ? data.exchanges : [];
-  const safeNames = CURATED_DEX_NAMES.map((x)=>x.toLowerCase());
-
   state.toolKeys = exchanges
     .filter((tool)=>{
       const hay = `${tool?.key || ''} ${tool?.name || ''}`.toLowerCase();
-      return safeNames.some((name)=>hay.includes(name.toLowerCase().replace('swap','')) || hay.includes(name.toLowerCase()));
+      return CURATED_DEX_ID_ALIASES.some((alias)=>hay.includes(alias));
     })
     .map((tool)=>tool.key)
     .filter(Boolean);
@@ -166,46 +165,36 @@ async function refreshPools() {
   if (Date.now() - state.poolFetchedAt < POOL_CACHE_MS && state.poolsByIdentity.size) return;
 
   const next = new Map();
-  const byChain = new Map();
+
   for (const asset of DEX_ASSET_REGISTRY) {
     const chain = chainForAsset(asset);
     if (!chain) continue;
-    if (!byChain.has(asset.chain)) byChain.set(asset.chain, []);
-    byChain.get(asset.chain).push(asset);
-  }
 
-  for (const [chainKey, assets] of byChain.entries()) {
-    const chain = chainForAsset(assets[0]);
-    for (let i=0; i<assets.length; i+=30) {
-      const batch = assets.slice(i, i+30);
-      const addresses = batch.map((asset)=>asset.address).join(',');
-      const url = `${DEXSCREENER_BASE}/tokens/v1/${chain.dexScreenerChain}/${addresses}`;
-      const pairs = await fetchJson(url);
-      const list = Array.isArray(pairs) ? pairs : [];
+    const url = `${DEXSCREENER_BASE}/token-pairs/v1/${chain.dexScreenerChain}/${asset.address}`;
+    const pairs = await fetchJson(url);
+    const list = Array.isArray(pairs) ? pairs : [];
 
-      for (const asset of batch) {
-        const eligible = list
-          .filter((pair)=>poolMatchesAsset(pair, asset))
-          .filter((pair)=>(finitePositive(pair?.liquidity?.usd) || 0) >= MIN_POOL_LIQUIDITY_USD)
-          .sort((a,b)=>(Number(b?.liquidity?.usd)||0)-(Number(a?.liquidity?.usd)||0));
-        if (!eligible.length) continue;
-        const pair = eligible[0];
-        next.set(poolIdentity(asset), {
-          chain: chainKey,
-          chainId: chain.chainId,
-          cexSymbol: asset.cexSymbol,
-          tokenAddress: asset.address,
-          quoteAddress: chain.quoteAddress,
-          dexId: pair.dexId,
-          pairAddress: pair.pairAddress,
-          priceUsd: finitePositive(pair.priceUsd),
-          liquidityUsd: finitePositive(pair?.liquidity?.usd),
-          volume24hUsd: finitePositive(pair?.volume?.h24),
-          url: pair.url || null,
-          fetchedAt: Date.now(),
-        });
-      }
-    }
+    const eligible = list
+      .filter((pair)=>poolMatchesAsset(pair, asset))
+      .filter((pair)=>(finitePositive(pair?.liquidity?.usd) || 0) >= MIN_POOL_LIQUIDITY_USD)
+      .sort((a,b)=>(Number(b?.liquidity?.usd)||0)-(Number(a?.liquidity?.usd)||0));
+
+    if (!eligible.length) continue;
+    const pair = eligible[0];
+    next.set(poolIdentity(asset), {
+      chain: asset.chain,
+      chainId: chain.chainId,
+      cexSymbol: asset.cexSymbol,
+      tokenAddress: asset.address,
+      quoteAddress: chain.quoteAddress,
+      dexId: pair.dexId,
+      pairAddress: pair.pairAddress,
+      priceUsd: finitePositive(pair.priceUsd),
+      liquidityUsd: finitePositive(pair?.liquidity?.usd),
+      volume24hUsd: finitePositive(pair?.volume?.h24),
+      url: pair.url || null,
+      fetchedAt: Date.now(),
+    });
   }
 
   state.poolsByIdentity = next;
