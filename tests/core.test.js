@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyOrderBookMessage, evaluateAcrossExchanges, evaluatePair, evaluateRoute, topPositive } from '../src/core.js';
 import { DEX_ASSET_REGISTRY, exactIdentityKey, validateRegistry } from '../src/dex-registry.js';
+import { capacitySearchBudgets } from '../src/dex-radar.js';
 import { cexSymbolFormat, depthCapacity } from '../src/cex-depth.js';
 import { transferStatusForRoute } from '../src/cex-network.js';
 import { BINANCE_DISCOVERY_STREAM, buildCommonUsdtMarkets, buildMultiExchangeUniverse, chunkTopics, createMarketHub, MAX_MONITORED_SYMBOLS, selectConfirmedSymbols, selectDiscoveredBinanceSymbols } from '../src/market-hub.js';
@@ -501,19 +502,35 @@ test('capacidade de depth soma múltiplos níveis em base e quote', () => {
   assert.equal(cap.askQuote,355.5);
 });
 
-test('status de rebalance distingue rede verificada, restrita e não verificável', () => {
+test('status de rebalance exige contrato exato para rede verificada', () => {
   assert.equal(transferStatusForRoute({
     publicVerificationAvailable:true,
     networkMatched:true,
+    contractVerified:true,
     depositEnabled:true,
     withdrawEnabled:true,
   }),'verified_open');
   assert.equal(transferStatusForRoute({
     publicVerificationAvailable:true,
     networkMatched:true,
+    contractVerified:true,
     depositEnabled:false,
     withdrawEnabled:true,
   }),'restricted');
+  assert.equal(transferStatusForRoute({
+    publicVerificationAvailable:true,
+    networkMatched:true,
+    contractVerified:false,
+    depositEnabled:true,
+    withdrawEnabled:true,
+  }),'restricted');
+  assert.equal(transferStatusForRoute({
+    publicVerificationAvailable:true,
+    networkMatched:true,
+    contractVerified:null,
+    depositEnabled:true,
+    withdrawEnabled:true,
+  }),'unverified');
   assert.equal(transferStatusForRoute({
     publicVerificationAvailable:false,
     depositEnabled:null,
@@ -533,4 +550,12 @@ test('validação pública de rede mantém exchanges sem endpoint público como 
   const result=await (await import('../src/cex-network.js')).validateCexNetwork('okx',asset);
   assert.equal(result.publicVerificationAvailable,false);
   assert.equal(result.status,'not_verifiable_without_authenticated_exchange_api');
+});
+
+
+test('busca de capacidade DEX sempre desce até o mínimo operacional de 10 USDT', () => {
+  assert.deepEqual(capacitySearchBudgets(500),[500,250,125,50,10]);
+  assert.deepEqual(capacitySearchBudgets(1000),[1000,500,250,100,10]);
+  assert.deepEqual(capacitySearchBudgets(25),[25,12.5,10]);
+  assert.deepEqual(capacitySearchBudgets(9),[]);
 });
