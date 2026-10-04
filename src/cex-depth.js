@@ -13,7 +13,7 @@ async function fetchJson(url, timeoutMs = DEFAULT_TIMEOUT_MS) {
   try {
     const r=await fetch(url,{
       signal:controller.signal,
-      headers:{'user-agent':'radar-cripto-carlos-depth/0.21'},
+      headers:{'user-agent':'radar-cripto-carlos-depth/0.21.2'},
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return await r.json();
