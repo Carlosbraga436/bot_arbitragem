@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { applyOrderBookMessage, evaluateAcrossExchanges, evaluatePair, evaluateRoute, topPositive } from '../src/core.js';
 import { AUTO_ASSET_ALLOWLIST, DEX_ASSET_REGISTRY, buildAutoAssetRegistry, exactIdentityKey, mergeAssetRegistries, validateRegistry } from '../src/dex-registry.js';
 import { applyDirectSlippage, decodeV2AmountsOut, directDexAdapterFor, encodeUniswapQuoteExactInputSingle, encodeV2GetAmountsOut } from '../src/dex-direct-quote.js';
-import { capacitySearchBudgets } from '../src/dex-radar.js';
+import { capacitySearchBudgets, poolReferenceIsTrusted } from '../src/dex-radar.js';
 import { cexSymbolFormat, depthCapacity } from '../src/cex-depth.js';
-import { rebalanceStatusForRoute, transferActionStatus, transferStatusForRoute } from '../src/cex-network.js';
+import { chainEntryMatches, rebalanceStatusForRoute, transferActionStatus, transferStatusForRoute } from '../src/cex-network.js';
 import { BINANCE_DISCOVERY_STREAM, buildCommonUsdtMarkets, buildMultiExchangeUniverse, chunkTopics, createMarketHub, MAX_MONITORED_SYMBOLS, selectConfirmedSymbols, selectDiscoveredBinanceSymbols } from '../src/market-hub.js';
 
 const now = 1_800_000_000_000;
@@ -722,4 +722,33 @@ test('decoder V2 extrai array de amounts do retorno ABI', () => {
   const word=(n)=>BigInt(n).toString(16).padStart(64,'0');
   const encoded='0x'+word(32)+word(2)+word(100)+word(123);
   assert.deepEqual(decodeV2AmountsOut(encoded),[100n,123n]);
+});
+
+
+test('pool preliminar exige quote token confiável e contrato base exato', () => {
+  const linkArb=DEX_ASSET_REGISTRY.find((x)=>x.symbol==='LINK' && x.chain==='arbitrum');
+  assert.ok(linkArb);
+
+  const wethPair={
+    quoteToken:{address:'0x82aF49447D8a07e3bd95BD0d56f35241523fBab1'},
+  };
+  const junkPair={
+    quoteToken:{address:'0x0000000000000000000000000000000000000042'},
+  };
+
+  assert.equal(poolReferenceIsTrusted(wethPair,linkArb),true);
+  assert.equal(poolReferenceIsTrusted(junkPair,linkArb),false);
+});
+
+test('matching de rede CEX não aceita substring acidental de ETH', () => {
+  const ethAsset=DEX_ASSET_REGISTRY.find((x)=>x.symbol==='LINK' && x.chain==='ethereum');
+  const arbAsset=DEX_ASSET_REGISTRY.find((x)=>x.symbol==='LINK' && x.chain==='arbitrum');
+  assert.ok(ethAsset);
+  assert.ok(arbAsset);
+
+  assert.equal(chainEntryMatches({chainId:'eth',chainName:'ERC20'},ethAsset),true);
+  assert.equal(chainEntryMatches({chainId:'ethereum',chainName:'Ethereum'},ethAsset),true);
+  assert.equal(chainEntryMatches({chainId:'statemint',chainName:'Asset Hub (Polkadot)'},ethAsset),false);
+  assert.equal(chainEntryMatches({chainId:'arbitrum',chainName:'Arbitrum One'},arbAsset),true);
+  assert.equal(chainEntryMatches({chainId:'arb',chainName:'Arbitrum'},arbAsset),true);
 });
