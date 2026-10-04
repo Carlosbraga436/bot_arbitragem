@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyOrderBookMessage, evaluateAcrossExchanges, evaluatePair, evaluateRoute, topPositive } from '../src/core.js';
+import { DEFAULT_COSTS, applyOrderBookMessage, evaluateAcrossExchanges, evaluatePair, evaluateRoute, exchangeFeePct, topPositive } from '../src/core.js';
 import { AUTO_ASSET_ALLOWLIST, DEX_ASSET_REGISTRY, DEX_CHAINS, buildAutoAssetRegistry, exactIdentityKey, mergeAssetRegistries, validateRegistry } from '../src/dex-registry.js';
 import { applyDirectSlippage, decodeV2AmountsOut, directDexAdapterFor, encodeUniswapQuoteExactInputSingle, encodeV2GetAmountsOut } from '../src/dex-direct-quote.js';
 import { capacitySearchBudgets, poolReferenceIsTrusted } from '../src/dex-radar.js';
@@ -818,4 +818,50 @@ test('CP23 calldata V2 suporta rota intermediária sem inferir endereços', () =
   const clean=data.slice(10);
   assert.equal(BigInt('0x'+clean.slice(128,192)),3n);
   assert.ok(data.toLowerCase().includes(wpol.toLowerCase().slice(2)));
+});
+
+
+test('CP24 universo inclui Bitget e HTX e exclui RWA Bitget', () => {
+  const markets=buildMultiExchangeUniverse({
+    bitgetSymbols:[
+      {symbol:'JUVUSDT',baseCoin:'JUV',quoteCoin:'USDT',status:'online',symbolType:'crypto',isRwa:'NO',isReality:'no'},
+      {symbol:'AAPLUSDT',baseCoin:'AAPL',quoteCoin:'USDT',status:'online',symbolType:'stock',isRwa:'YES',isReality:'yes'},
+    ],
+    htxSymbols:[
+      {symbol:'juvusdt',bc:'juv',qc:'usdt',state:'online'},
+    ],
+  });
+  const juv=markets.find((x)=>x.symbol==='JUVUSDT');
+  assert.ok(juv);
+  assert.equal(juv.venues.bitget,true);
+  assert.equal(juv.venues.htx,true);
+  assert.equal(juv.feePctByExchange.bitget,0.10);
+  assert.equal(juv.feePctByExchange.htx,0.20);
+  assert.equal(markets.some((x)=>x.symbol==='AAPLUSDT'),false);
+});
+
+test('CP24 rota CEX pode comprar na Bitget e vender na HTX com taxas conservadoras', () => {
+  const r=evaluateAcrossExchanges({
+    symbol:'JUVUSDT',
+    identityConfirmed:true,
+    booksByExchange:{
+      bitget:book(1.449,1.450,1000),
+      htx:book(1.510,1.512,1000),
+    },
+    budgetUsdt:100,
+    costs:DEFAULT_COSTS,
+    rules:{...rules,maxUnverifiedGrossSpreadPct:5,maxVenueDeviationPct:3,budgetMode:'maximum'},
+    now,
+  });
+  assert.equal(r.buyExchange,'bitget');
+  assert.equal(r.sellExchange,'htx');
+  assert.ok(r.grossSpreadPct>4);
+  assert.ok(r.netPnlUsdt>0);
+  assert.equal(exchangeFeePct('bitget',DEFAULT_COSTS),0.10);
+  assert.equal(exchangeFeePct('htx',DEFAULT_COSTS),0.20);
+});
+
+test('CP24 formatação de símbolos suporta Bitget e HTX', () => {
+  assert.equal(cexSymbolFormat('bitget','JUVUSDT'),'JUVUSDT');
+  assert.equal(cexSymbolFormat('htx','JUVUSDT'),'juvusdt');
 });
