@@ -9,7 +9,7 @@
 <body>
   <main class="shell">
     <header>
-      <div><span class="eyebrow">ENTRE</span><h1>RADAR CRIPTO</h1><p>BINANCE × BYBIT × OKX × GATE.IO × KUCOIN · spot USDT · somente simulação</p></div>
+      <div><span class="eyebrow">ENTRE</span><h1>RADAR CRIPTO</h1><p>5 CEXs + DEXs selecionadas · spot USDT · somente simulação</p></div>
       <button id="reconnect">Reconectar ↻</button>
     </header>
 
@@ -38,7 +38,19 @@
       <div class="tableWrap"><table><thead><tr><th>Par</th><th>Direção</th><th>Spread</th><th>Líquido</th><th>Status</th></tr></thead><tbody id="rows"><tr><td colspan="5">Aguardando…</td></tr></tbody></table></div>
     </section>
 
-    <footer>Sem depósito · sem API key · sem envio de ordens · 5 exchanges · universo USDT dinâmico · O valor selecionado é um teto, não uma obrigação de usar tudo. O radar mantém oportunidades parcialmente executáveis e informa quanto cabe no book visível. Top 5 exige lucro líquido da execução após taxas + reserva; recomposição é cenário separado.</footer>
+    <section class="card hero">
+      <span class="eyebrow">DEX ↔ CEX · BETA SAME-CHAIN</span>
+      <div id="dexBest"><h2>—</h2><p>Inicializando contratos e pools curados…</p></div>
+    </section>
+
+    <section class="card">
+      <div class="sectionHead"><div><h2 id="dexTableTitle">DEX ↔ CEX</h2><p id="dexSummary">Validando contratos exatos…</p></div><div class="badge">CONTRATO + CHAIN ✓</div></div>
+      <div class="costs">Ethereum e Arbitrum apenas. O token nunca é casado por ticker isolado: as 10 identidades manuais continuam e a expansão automática só aceita contrato com concordância exata entre a lista oficial Uniswap e LI.FI, além de mapeamento CEX explícito. Pools abaixo de US$ 250 mil ou com menos de US$ 10 mil de volume em 24h ficam fora; a referência preliminar só aceita pares contra USDT/USDC/DAI/WETH conhecidos. Uniswap, SushiSwap e Camelot tentam quote direto on-chain; LI.FI funciona como fallback e confirmação para as demais DEXs curadas. Depois do quote, a candidata ainda precisa passar por depth CEX, custos e rebalanceamento token + USDT.</div>
+      <div id="dexFunnel" class="funnel"><div class="funnelReasons">Montando funil de confirmação…</div></div>
+      <div class="tableWrap"><table><thead><tr><th>Ativo</th><th>Direção</th><th>Spread</th><th>Líquido</th><th>Validação</th></tr></thead><tbody id="dexRows"><tr><td colspan="5">Aguardando…</td></tr></tbody></table></div>
+    </section>
+
+    <footer>Sem depósito · sem API key · sem envio de ordens · 5 CEXs + DEX beta · quotes diretos são eth_call somente leitura · expansão automática exige contrato exato em duas fontes · O valor selecionado é um teto, não uma obrigação de usar tudo. Top 5 exige lucro líquido após custos modelados; rebalanceamento é validado separadamente.</footer>
   </main>
   <script type="module" src="/app.js"></script>
 </body>

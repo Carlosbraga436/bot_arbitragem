@@ -4,6 +4,9 @@ const state={
   budget:100,
   pollTimer:null,
   lastRadar:null,
+  dexTimer:null,
+  dexBusy:false,
+  lastDexRadar:null,
 };
 
 const $=(id)=>document.getElementById(id);
@@ -50,7 +53,9 @@ function applyStatus(exchange,remote) {
 
 function stopPolling() {
   if (state.pollTimer) clearInterval(state.pollTimer);
+  if (state.dexTimer) clearInterval(state.dexTimer);
   state.pollTimer=null;
+  state.dexTimer=null;
 }
 
 function renderRadar(data) {
@@ -129,6 +134,126 @@ function renderRadar(data) {
     : '<tr><td colspan="5">Nenhum par com dados e liquidez completos neste instante.</td></tr>';
 }
 
+function shortAddress(address) {
+  const value=String(address||'');
+  return value.length>12 ? `${value.slice(0,6)}…${value.slice(-4)}` : value || '—';
+}
+
+function dexVenueLabel(name) {
+  return exchangeLabel(name) !== name ? exchangeLabel(name) : (name || 'DEX');
+}
+
+function renderDexRadar(data) {
+  state.lastDexRadar=data;
+  const positives=Array.isArray(data?.top5)?data.top5:[];
+  const nearest=Array.isArray(data?.nearest5)?data.nearest5:[];
+  const preliminary=Array.isArray(data?.preliminaryTop5)?data.preliminaryTop5:[];
+  const shown=positives.length?positives:(nearest.length?nearest:preliminary);
+  const best=shown[0]||null;
+
+  $('dexSummary').textContent=
+    `${Number(data?.registryAssets||0).toLocaleString('pt-BR')} identidades (`+
+    `${Number(data?.manualRegistryAssets||0)} fixas + ${Number(data?.autoVerifiedAssets||0)} auto-verificadas) · `+
+    `${Number(data?.poolsFound||0).toLocaleString('pt-BR')} pools líquidos · `+
+    `${Number(data?.confirmedCount||0).toLocaleString('pt-BR')} confirmadas · `+
+    `${Number(data?.positiveCount||0)} elegíveis`;
+
+  const funnel=data?.funnel||{};
+  const reasons=funnel?.dropReasons||{};
+  const funnelEl=$('dexFunnel');
+  if (funnelEl) {
+    const steps=[
+      ['Identidades',funnel.identities],
+      ['Pool líquido',funnel.withLiquidPool],
+      ['CEX comparável',funnel.cexComparable],
+      ['Spread ≥ 0,25%',funnel.preliminaryRoutes],
+      ['Forte ≥ 0,50%',funnel.strongRoutes],
+      ['Confirmadas',funnel.confirmedRoutes],
+      ['Líquido +',funnel.economicsPositiveRoutes],
+    ];
+    const reasonText=[
+      reasons.noLiquidPool?`${reasons.noLiquidPool} sem pool de referência confiável`:null,
+      reasons.noCexBook?`${reasons.noCexBook} sem book CEX`:null,
+      reasons.spreadBelowPreliminary?`${reasons.spreadBelowPreliminary} sem spread mínimo`:null,
+      reasons.belowConfirmationThreshold?`${reasons.belowConfirmationThreshold} abaixo de 0,50%`:null,
+      reasons.noQuoteAdapter?`${reasons.noQuoteAdapter} sem quote compatível`:null,
+      reasons.waitingConfirmationBudget?`${reasons.waitingConfirmationBudget} aguardando confirmação`:null,
+      reasons.confirmationError?`${reasons.confirmationError} erro de confirmação`:null,
+      reasons.nonPositiveAfterCosts?`${reasons.nonPositiveAfterCosts} negativas após custos`:null,
+      reasons.knownNetworkRestriction?`${reasons.knownNetworkRestriction} com rede restrita`:null,
+      reasons.rebalanceUnverified?`${reasons.rebalanceUnverified} rebalance não verificável`:null,
+    ].filter(Boolean).join(' · ');
+
+    funnelEl.innerHTML=`<div class="funnelSteps">${steps.map(([label,value],i)=>
+      `<div class="funnelStep"><small>${label}</small><b>${Number(value||0).toLocaleString('pt-BR')}</b></div>${i<steps.length-1?'<span class="funnelArrow">→</span>':''}`
+    ).join('')}</div><div class="funnelReasons">${reasonText||'Nenhum descarte relevante neste ciclo.'}</div>`;
+  }
+  $('dexTableTitle').textContent=positives.length
+    ? 'Top DEX ↔ CEX confirmadas'
+    : (nearest.length ? 'DEX ↔ CEX confirmadas mais próximas' : 'Pré-candidatas DEX ↔ CEX — aguardando quote');
+
+  if (best) {
+    const direction=`${dexVenueLabel(best.buyVenue)} → ${dexVenueLabel(best.sellVenue)}`;
+    const confirmed=best.confirmedExecutable !== false && Number.isFinite(Number(best.netPnlUsdt));
+    const spread=confirmed ? Number(best.grossSpreadPct) : Number(best.preliminarySpreadPct);
+
+    $('dexBest').innerHTML=`
+      <h2>${best.asset} ${confirmed?`<span class="${best.eligible?'profit':''}">${money(best.netPnlUsdt)}</span>`:'<span class="neg">NÃO CONFIRMADA</span>'}</h2>
+      <div class="heroRoute">${direction}</div>
+      <div class="heroMetrics">
+        <span><small>${confirmed?'Spread confirmado':'Spread indicativo'}</small><b class="${best.eligible?'pos':''}">${spread>=0?'+':''}${fmt(spread,3)}%</b></span>
+        <span><small>Máx. lucrativo agora</small><b>${confirmed&&Number.isFinite(Number(best.maxProfitableBudgetUsdt))?`${fmt(best.maxProfitableBudgetUsdt,2)} USDT`:'—'}</b></span>
+        <span><small>Depth CEX</small><b>${best.depthConfirmed?`${best.cexDepthLevels||0} níveis ✓`:'—'}</b></span>
+        <span><small>Confirmação DEX</small><b>${confirmed?(best.quoteSource==='direct_onchain'?'direta on-chain ✓':(best.quoteSource==='lifi_fallback'?'LI.FI fallback':'confirmada')):(best.quoteAdapter||'aguardando')}</b></span>
+        <span><small>Rede</small><b>${best.chain}</b></span>
+        <span><small>Contrato DEX</small><b>${shortAddress(best.contract)}</b></span>
+        <span><small>Token na CEX</small><b>${best.cexContractVerified===true?'match exato ✓':(best.cexContractVerified===false?'DIVERGENTE':'não público')}</b></span>
+        <span><small>USDT na CEX</small><b>${best.quoteContractVerified===true?'match exato ✓':(best.quoteContractVerified===false?'DIVERGENTE':'não público')}</b></span>
+        <span><small>Rebalance</small><b>${best.rebalanceStatus==='verified_open'?'2 pernas ✓':(best.rebalanceStatus==='restricted'?'RESTRITA':'não verificado')}</b></span>
+        <span><small>Gas estimado</small><b>${confirmed?money(-Number(best.gasUsd||0)):'—'}</b></span>
+        <span><small>Liquidez pool</small><b>${Number(best.poolLiquidityUsd||0).toLocaleString('pt-BR',{style:'currency',currency:'USD',maximumFractionDigits:0})}</b></span>
+      </div>
+      <p>Identidade DEX: chainId ${best.chainId} + contrato exato. Mapeamentos automáticos só entram após concordância do contrato entre lista oficial Uniswap e LI.FI; nenhum token arbitrário é aceito apenas pelo ticker. ${confirmed?`Quote: ${best.quoteSourceLabel||best.quoteSource||'confirmado'}. Screening: ${best.screeningStatus}. Order book da CEX confirmado em múltiplos níveis.`:'Quote executável ainda não confirmado — não usar esta linha para executar.'} ${best.knownNetworkRestriction?'Uma das pernas necessárias ao rebalanceamento token/USDT está publicamente restrita ou divergente e a rota foi bloqueada.':(best.transferabilityVerified?'As duas pernas direcionais do rebalanceamento foram verificadas publicamente na mesma rede e com contratos compatíveis.':'Quando a CEX não expõe todos os dados públicos de token e USDT, o radar mantém o rebalanceamento como não verificado, sem fingir garantia.')} A execução continua em modo read-only.</p>`;
+  } else {
+    $('dexBest').innerHTML='<h2>—</h2><p>Nenhuma rota DEX ↔ CEX detectada neste ciclo. O radar só aceita contrato exato; ticker sozinho nunca é usado como identidade.</p>';
+  }
+
+  $('dexRows').innerHTML=shown.length
+    ? shown.map((r)=>{
+        const confirmed=r.confirmedExecutable !== false && Number.isFinite(Number(r.netPnlUsdt));
+        const spread=confirmed ? Number(r.grossSpreadPct) : Number(r.preliminarySpreadPct);
+        return `<tr>
+        <td><b>${r.asset}</b><small class="priceLine">${r.chain} · ${shortAddress(r.contract)}</small></td>
+        <td><b class="routeText">${dexVenueLabel(r.buyVenue)} → ${dexVenueLabel(r.sellVenue)}</b><small class="priceLine">DEX: ${r.dex}</small></td>
+        <td class="${r.eligible?'pos':''}">${spread>=0?'+':''}${fmt(spread,3)}%</td>
+        <td class="${r.eligible?'pos':'neg'}">${confirmed?money(r.netPnlUsdt):'aguardando quote'}</td>
+        <td>${r.sameAssetVerified
+          ? (confirmed
+              ? `DEX contrato ✓ · token CEX ${r.cexContractVerified===true?'✓':(r.cexContractVerified===false?'≠':'?')} · USDT CEX ${r.quoteContractVerified===true?'✓':(r.quoteContractVerified===false?'≠':'?')} · depth ${r.depthConfirmed?'✓':'—'} · ${r.rebalanceStatus==='verified_open'?'rebalance 2/2 ✓':(r.rebalanceStatus==='restricted'?'rebalance restrito':'rebalance ?')}`
+              : 'DEX contrato ✓ · CEX ainda não confirmada')
+          : 'bloqueado'}</td>
+      </tr>`;
+      }).join('')
+    : '<tr><td colspan="5">Nenhuma rota DEX ↔ CEX detectada neste ciclo.</td></tr>';
+}
+
+async function fetchDexRadar() {
+  if (state.dexBusy) return;
+  state.dexBusy=true;
+  try {
+    const r=await fetch(`/api/dex-radar?budget=${encodeURIComponent(state.budget)}`,{cache:'no-store'});
+    if (!r.ok) {
+      const body=await r.json().catch(()=>null);
+      throw new Error(body?.message||`DEX radar HTTP ${r.status}`);
+    }
+    renderDexRadar(await r.json());
+  } catch(error) {
+    $('dexSummary').textContent=`DEX beta: ${error.message}`;
+  } finally {
+    state.dexBusy=false;
+  }
+}
+
 async function fetchRadar() {
   const r=await fetch(`/api/radar?budget=${encodeURIComponent(state.budget)}`,{cache:'no-store'});
   if (!r.ok) {
@@ -143,6 +268,8 @@ async function startPolling() {
   state.pollTimer=setInterval(()=>{
     fetchRadar().catch((error)=>console.warn('Falha ao atualizar radar:',error));
   },1000);
+  await fetchDexRadar();
+  state.dexTimer=setInterval(fetchDexRadar,15_000);
 }
 
 async function bootstrap() {
@@ -163,6 +290,7 @@ for (const btn of document.querySelectorAll('[data-budget]')) {
     $('budgetLabel').textContent=state.budget.toLocaleString('pt-BR');
     $('capital').textContent=(state.budget*2).toLocaleString('pt-BR');
     fetchRadar().catch(showFatal);
+    fetchDexRadar();
   });
 }
 

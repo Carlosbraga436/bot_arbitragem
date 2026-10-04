@@ -15,6 +15,7 @@ import {
   exchangeFeePct,
   topPositive,
 } from './src/core.js';
+import { buildDexRadar, dexRegistrySnapshot } from './src/dex-radar.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
@@ -25,7 +26,7 @@ const OKX_BASES = ['https://www.okx.com','https://openapi.okx.com'];
 const GATE_BASES = ['https://api.gateio.ws/api/v4'];
 const KUCOIN_BASES = ['https://api.kucoin.com'];
 const REQUEST_TIMEOUT_MS = 10_000;
-const APP_VERSION = '0.19.1-recovery.1';
+const APP_VERSION = '0.22.1-recovery.1';
 const RADAR_CACHE_MS = 750;
 
 let runtimePromise = null;
@@ -191,6 +192,8 @@ async function ensureRuntime() {
         marketHub,
         bySymbol:new Map(catalog.candidates.map((x)=>[x.symbol,x])),
         radarCache:new Map(),
+        dexRadarCache:new Map(),
+        dexRadarInFlight:new Map(),
       };
 
       setTimeout(()=>{
@@ -202,6 +205,35 @@ async function ensureRuntime() {
           console.warn('[diagnostics] falhou:',error?.message || error);
         }
       },15_000);
+
+      setTimeout(async()=>{
+        try {
+          const dex=await dexRadarSnapshot(runtime,100);
+          console.log('[dex-diagnostics-100]',JSON.stringify({
+            version:dex.version,
+            mode:dex.mode,
+            registryAssets:dex.registryAssets,
+            manualRegistryAssets:dex.manualRegistryAssets,
+            autoVerifiedAssets:dex.autoVerifiedAssets,
+            autoAllowlistCandidates:dex.autoAllowlistCandidates,
+            poolsFound:dex.poolsFound,
+            directDex:dex.directDex,
+            lifiDexTools:dex.lifiDexTools,
+            funnel:dex.funnel,
+            preliminaryCount:dex.preliminaryCount,
+            preliminaryTop5:dex.preliminaryTop5,
+            confirmedCount:dex.confirmedCount,
+            depthConfirmedCount:dex.depthConfirmedCount,
+            transferVerifiedCount:dex.transferVerifiedCount,
+            positiveCount:dex.positiveCount,
+            top5:dex.top5,
+            nearest5:dex.nearest5,
+            errors:dex.errors,
+          }));
+        } catch (error) {
+          console.warn('[dex-diagnostics] falhou:',error?.message || error);
+        }
+      },25_000);
 
       return runtime;
     })().catch((error)=>{
@@ -316,6 +348,36 @@ function radarSnapshot(runtime,budgetUsdt=100) {
   return body;
 }
 
+async function dexRadarSnapshot(runtime,budgetUsdt=100) {
+  const budget=Number.isFinite(Number(budgetUsdt)) && Number(budgetUsdt)>0
+    ? Number(budgetUsdt)
+    : 100;
+  const cached=runtime.dexRadarCache.get(budget);
+  if (cached && Date.now()-cached.generatedAt<15_000) return cached;
+
+  if (runtime.dexRadarInFlight.has(budget)) {
+    return runtime.dexRadarInFlight.get(budget);
+  }
+
+  const promise=buildDexRadar({
+    snapshot:runtime.marketHub.snapshot(),
+    budgetUsdt:budget,
+    costsForSymbol:(symbol)=>costsForAsset(runtime.bySymbol.get(symbol)),
+  }).then((body)=>({
+    ...body,
+    version:APP_VERSION,
+    budgetUsdt:budget,
+  })).then((body)=>{
+    runtime.dexRadarCache.set(budget,body);
+    return body;
+  }).finally(()=>{
+    runtime.dexRadarInFlight.delete(budget);
+  });
+
+  runtime.dexRadarInFlight.set(budget,promise);
+  return promise;
+}
+
 function marketDiagnostics(runtime,budgetUsdt=100) {
   const radar=radarSnapshot(runtime,budgetUsdt);
   const candidates=[...radar.top5,...radar.nearest5];
@@ -391,6 +453,12 @@ const server=http.createServer(async(req,res)=>{
         ordersEnabled:false,
         version:APP_VERSION,
         exchanges:['binance','bybit','okx','gate','kucoin'],
+        dexRadar:{
+          enabled:true,
+          mode:'same-chain-read-only',
+          identity:'explicit_cex_mapping+chainId+exact_contract; auto requires Uniswap-list+LI.FI contract agreement',
+          directQuotes:'read-only eth_call first for supported DEXs; LI.FI fallback',
+        },
       });
     }
 
@@ -410,6 +478,21 @@ const server=http.createServer(async(req,res)=>{
       return json(res,200,radarSnapshot(runtime,budget));
     }
 
+    if (url.pathname==='/api/dex-radar') {
+      const runtime=await ensureRuntime();
+      const budget=Number(url.searchParams.get('budget')||100);
+      return json(res,200,await dexRadarSnapshot(runtime,budget));
+    }
+
+    if (url.pathname==='/api/dex-registry') {
+      await ensureRuntime();
+      return json(res,200,{
+        version:APP_VERSION,
+        identityPolicy:'explicit CEX mapping + chainId + exact contract; automatic identities require Uniswap token list and LI.FI exact-contract agreement',
+        assets:dexRegistrySnapshot(),
+      });
+    }
+
     if (url.pathname==='/api/diagnostics') {
       const runtime=await ensureRuntime();
       const budget=Number(url.searchParams.get('budget')||100);
@@ -417,8 +500,9 @@ const server=http.createServer(async(req,res)=>{
     }
 
     if (url.pathname==='/api/reconnect' && req.method==='POST') {
-      const {marketHub,radarCache}=await ensureRuntime();
+      const {marketHub,radarCache,dexRadarCache}=await ensureRuntime();
       radarCache.clear();
+      dexRadarCache.clear();
       marketHub.reconnect();
       return json(res,202,{ok:true,message:'reconnect_requested'});
     }
