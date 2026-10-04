@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyOrderBookMessage, evaluateAcrossExchanges, evaluatePair, evaluateRoute, topPositive } from '../src/core.js';
-import { DEX_ASSET_REGISTRY, exactIdentityKey, validateRegistry } from '../src/dex-registry.js';
+import { AUTO_ASSET_ALLOWLIST, DEX_ASSET_REGISTRY, buildAutoAssetRegistry, exactIdentityKey, mergeAssetRegistries, validateRegistry } from '../src/dex-registry.js';
+import { applyDirectSlippage, decodeV2AmountsOut, directDexAdapterFor, encodeUniswapQuoteExactInputSingle, encodeV2GetAmountsOut } from '../src/dex-direct-quote.js';
 import { capacitySearchBudgets } from '../src/dex-radar.js';
 import { cexSymbolFormat, depthCapacity } from '../src/cex-depth.js';
 import { rebalanceStatusForRoute, transferActionStatus, transferStatusForRoute } from '../src/cex-network.js';
@@ -653,4 +654,72 @@ test('restrição conhecida na perna de USDT bloqueia o rebalanceamento', () => 
 
   assert.equal(result.status,'restricted');
   assert.equal(result.requirements.find((x)=>x.key==='usdt_to_chain')?.status,'restricted');
+});
+
+
+test('expansão automática exige contrato exato em duas fontes e rejeita ambiguidade', () => {
+  const allowlist=[{canonicalId:'compound',symbol:'COMP',cexSymbol:'COMPUSDT',chain:'ethereum'}];
+  const token={chainId:1,symbol:'COMP',name:'Compound',address:'0xc00e94Cb662C3520282E6f5717214004A7f26888',decimals:18};
+
+  const accepted=buildAutoAssetRegistry({
+    uniswapTokens:[token],
+    lifiTokens:[{...token,address:token.address.toLowerCase()}],
+    allowlist,
+  });
+  assert.equal(accepted.length,1);
+  assert.equal(accepted[0].cexSymbol,'COMPUSDT');
+  assert.equal(accepted[0].identitySource,'uniswap_token_list+lifi_exact_contract_agreement');
+
+  const mismatch=buildAutoAssetRegistry({
+    uniswapTokens:[token],
+    lifiTokens:[{...token,address:'0x0000000000000000000000000000000000000001'}],
+    allowlist,
+  });
+  assert.equal(mismatch.length,0);
+
+  const ambiguous=buildAutoAssetRegistry({
+    uniswapTokens:[token,{...token,address:'0x0000000000000000000000000000000000000002'}],
+    lifiTokens:[token],
+    allowlist,
+  });
+  assert.equal(ambiguous.length,0);
+});
+
+test('merge de registros preserva identidade manual e não duplica contrato', () => {
+  const manual=DEX_ASSET_REGISTRY[0];
+  const merged=mergeAssetRegistries([manual],[{...manual,identitySource:'auto'}]);
+  assert.equal(merged.length,1);
+  assert.equal(merged[0].identitySource,'manual_exact_contract');
+  assert.ok(AUTO_ASSET_ALLOWLIST.length>=30);
+});
+
+test('adapters diretos são restritos a protocolos e redes explicitamente suportados', () => {
+  assert.equal(directDexAdapterFor('uniswap','ethereum'),'uniswap_v3_quoter');
+  assert.equal(directDexAdapterFor('uniswap-v3','arbitrum'),'uniswap_v3_quoter');
+  assert.equal(directDexAdapterFor('sushiswap','ethereum'),'sushiswap_v2_router');
+  assert.equal(directDexAdapterFor('camelot','arbitrum'),'camelot_v2_router');
+  assert.equal(directDexAdapterFor('camelot','ethereum'),null);
+  assert.equal(directDexAdapterFor('curve','ethereum'),null);
+});
+
+test('calldata de quote direto usa seletores canônicos e contratos exatos', () => {
+  const usdt='0xdAC17F958D2ee523a2206206994597C13D831ec7';
+  const link='0x514910771AF9Ca656af840dff83E8264EcF986CA';
+  const uni=encodeUniswapQuoteExactInputSingle({tokenIn:usdt,tokenOut:link,amountIn:100000000n,fee:3000});
+  const v2=encodeV2GetAmountsOut({tokenIn:usdt,tokenOut:link,amountIn:100000000n});
+  assert.ok(uni.startsWith('0xc6a5026a'));
+  assert.ok(v2.startsWith('0xd06ca61f'));
+  assert.ok(uni.toLowerCase().includes(usdt.toLowerCase().slice(2)));
+  assert.ok(uni.toLowerCase().includes(link.toLowerCase().slice(2)));
+});
+
+test('slippage direto é aplicado em inteiro sem arredondar para cima', () => {
+  assert.equal(applyDirectSlippage(1_000_000n,50),995_000n);
+  assert.equal(applyDirectSlippage(1_000_001n,50),995_000n);
+});
+
+test('decoder V2 extrai array de amounts do retorno ABI', () => {
+  const word=(n)=>BigInt(n).toString(16).padStart(64,'0');
+  const encoded='0x'+word(32)+word(2)+word(100)+word(123);
+  assert.deepEqual(decodeV2AmountsOut(encoded),[100n,123n]);
 });
