@@ -434,6 +434,15 @@ function uniqueDescending(values) {
     .sort((a,b)=>b-a);
 }
 
+export function capacitySearchBudgets(maximumBudgetUsdt) {
+  const maximum=finitePositive(maximumBudgetUsdt);
+  if (!maximum || maximum<MIN_EXECUTION_USDT) return [];
+  return uniqueDescending([
+    ...CAPACITY_SEARCH_STEPS.map((ratio)=>maximum*ratio),
+    MIN_EXECUTION_USDT,
+  ]).filter((budget)=>budget<=maximum+1e-9);
+}
+
 function cexCapacityBudget(direction, depth, poolPriceUsd, requestedBudgetUsdt) {
   const capacity=depthCapacity(depth);
   const requested=finitePositive(requestedBudgetUsdt);
@@ -599,10 +608,7 @@ async function findMaximumProfitable({candidate,costs,depth}) {
   }
 
   const maximum=Math.min(requested,cap);
-  const budgets=uniqueDescending([
-    ...CAPACITY_SEARCH_STEPS.map((ratio)=>maximum*ratio),
-    MIN_EXECUTION_USDT,
-  ]);
+  const budgets=capacitySearchBudgets(maximum);
   const attempts=[];
   let positive=null;
   let previousHigher=null;
