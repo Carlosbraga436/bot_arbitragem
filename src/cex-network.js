@@ -57,7 +57,7 @@ async function fetchJson(url, timeoutMs=6000) {
   try {
     const r=await fetch(url,{
       signal:controller.signal,
-      headers:{'user-agent':'radar-cripto-carlos-network/0.21.1'},
+      headers:{'user-agent':'radar-cripto-carlos-network/0.21.2'},
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return await r.json();
@@ -241,25 +241,112 @@ export async function validateCexNetwork(exchange, asset) {
   return value;
 }
 
-export function transferStatusForRoute(network) {
-  if (!network) return 'unverified';
+export function transferActionStatus(network, action) {
+  if (!network || (action!=='deposit' && action!=='withdraw')) return 'unverified';
+  const enabled=action==='deposit' ? network.depositEnabled : network.withdrawEnabled;
+
   if (
-    network.publicVerificationAvailable
-    && network.networkMatched
+    network.publicVerificationAvailable===true
+    && network.networkMatched===true
     && network.contractVerified===true
-    && network.depositEnabled
-    && network.withdrawEnabled
+    && enabled===true
   ) return 'verified_open';
 
   if (
-    network.publicVerificationAvailable
+    network.publicVerificationAvailable===true
     && (
       network.networkMatched===false
       || network.contractVerified===false
-      || network.depositEnabled===false
-      || network.withdrawEnabled===false
+      || enabled===false
     )
   ) return 'restricted';
 
   return 'unverified';
+}
+
+export function transferStatusForRoute(network) {
+  if (!network) return 'unverified';
+  const deposit=transferActionStatus(network,'deposit');
+  const withdraw=transferActionStatus(network,'withdraw');
+  if (deposit==='restricted' || withdraw==='restricted') return 'restricted';
+  if (deposit==='verified_open' && withdraw==='verified_open') return 'verified_open';
+  return 'unverified';
+}
+
+export function rebalanceRequirementsForDirection(direction) {
+  if (direction==='dex_to_cex') {
+    return [
+      { key:'token_to_cex', asset:'token', action:'deposit' },
+      { key:'usdt_to_chain', asset:'quote', action:'withdraw' },
+    ];
+  }
+  if (direction==='cex_to_dex') {
+    return [
+      { key:'token_to_chain', asset:'token', action:'withdraw' },
+      { key:'usdt_to_cex', asset:'quote', action:'deposit' },
+    ];
+  }
+  return [];
+}
+
+export function rebalanceStatusForRoute({direction,tokenNetwork,quoteNetwork}) {
+  const requirements=rebalanceRequirementsForDirection(direction).map((requirement)=>{
+    const network=requirement.asset==='token' ? tokenNetwork : quoteNetwork;
+    return {
+      ...requirement,
+      status:transferActionStatus(network,requirement.action),
+    };
+  });
+
+  const statuses=requirements.map((x)=>x.status);
+  const status=statuses.includes('restricted')
+    ? 'restricted'
+    : (requirements.length>0 && statuses.every((x)=>x==='verified_open') ? 'verified_open' : 'unverified');
+
+  return {
+    status,
+    requirements,
+    verifiedRequirements:requirements.filter((x)=>x.status==='verified_open').length,
+    totalRequirements:requirements.length,
+  };
+}
+
+function quoteAssetFor(asset) {
+  const chain=chainForAsset(asset);
+  if (!chain) return null;
+  return {
+    canonicalId:'tether',
+    cexSymbol:'USDT',
+    symbol:'USDT',
+    name:'Tether USD',
+    chain:asset.chain,
+    address:chain.quoteAddress,
+    decimals:chain.quoteDecimals,
+  };
+}
+
+export async function validateCexRebalance(exchange, asset, direction) {
+  const quoteAsset=quoteAssetFor(asset);
+  const [tokenNetwork,quoteNetwork]=await Promise.all([
+    validateCexNetwork(exchange,asset),
+    quoteAsset
+      ? validateCexNetwork(exchange,quoteAsset)
+      : Promise.resolve({
+          exchange:String(exchange||'').toLowerCase(),
+          publicVerificationAvailable:false,
+          networkMatched:null,
+          contractVerified:null,
+          depositEnabled:null,
+          withdrawEnabled:null,
+          status:'quote_asset_chain_unavailable',
+        }),
+  ]);
+
+  return {
+    exchange:String(exchange||'').toLowerCase(),
+    direction,
+    tokenNetwork,
+    quoteNetwork,
+    ...rebalanceStatusForRoute({direction,tokenNetwork,quoteNetwork}),
+  };
 }
