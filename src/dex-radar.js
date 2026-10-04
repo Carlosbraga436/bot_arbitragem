@@ -49,26 +49,31 @@ const TRUSTED_POOL_QUOTES = Object.freeze({
     '0xda10009cbd5d07dd0cecc66161fc93d7c9000da1',
   ]),
   base: new Set([
-    '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', // USDC
+    '0xfde4c96c8593536e31f229ea8f37b2ada2699bb2', // bridged USDT
+    '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', // native USDC
+    '0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca', // USDbC
     '0x4200000000000000000000000000000000000006', // WETH
   ]),
   polygon: new Set([
-    '0xc2132d05d31c914a87c6611c10748aacbb58e8f', // USDT
+    '0xc2132d05d31c914a87c6611c10748aeb04b58e8f', // USDT
     '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359', // native USDC
     '0x2791bca1f2de4661ed88a30c99a7a9449aa84174', // USDC.e
     '0x7ceb23fd6bc0add59e62ac25578270cff1b9f619', // WETH
+    '0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270', // WPOL
     '0x8f3cf7ad23cd3cadbd9735aff958023239c6a063', // DAI
   ]),
   bsc: new Set([
     '0x55d398326f99059ff775485246999027b3197955', // USDT
     '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d', // USDC
-    '0x2170ed0880ac9a755fd29b2688956bd959f933f8', // ETH
+    '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c', // WBNB
+    '0x2170ed0880ac9a755fd29b2688956bd959f933f8', // Binance-Peg ETH
   ]),
 });
 const MIN_PRELIMINARY_SPREAD_PCT = 0.25;
 const MIN_CONFIRM_SPREAD_PCT = 0.50;
-const MAX_DIRECT_CONFIRMATIONS = 4;
-const MAX_FALLBACK_CONFIRMATIONS = 3;
+const MAX_DIRECT_CONFIRMATIONS = 6;
+const MAX_FALLBACK_CONFIRMATIONS = 2;
+const MAX_POOLS_PER_ASSET = 3;
 const DEXSCREENER_BATCH_SIZE = 25;
 const LIFI_SLIPPAGE = 0.005;
 const DIRECT_SLIPPAGE_BPS = 50;
@@ -154,7 +159,7 @@ async function fetchJson(url, timeoutMs = 8_000, retries = 2) {
     try {
       const r = await fetch(url, {
         signal: controller.signal,
-        headers: { 'user-agent':'radar-cripto-carlos-dex/0.23.0' },
+        headers: { 'user-agent':'radar-cripto-carlos-dex/0.23.1' },
       });
 
       if (r.ok) return await r.json();
@@ -364,6 +369,22 @@ function chunks(values,size) {
   return out;
 }
 
+function poolsForAsset(asset) {
+  const value=state.poolsByIdentity.get(poolIdentity(asset));
+  if (!value) return [];
+  return Array.isArray(value)?value:[value];
+}
+
+function allSelectedPools() {
+  return [...state.poolsByIdentity.values()].flatMap((value)=>Array.isArray(value)?value:[value]);
+}
+
+function poolConfirmationRank(pair,chainKey) {
+  if (directDexAdapterFor(pair?.dexId,chainKey)) return 2;
+  if (liFiToolForDexId(pair?.dexId)) return 1;
+  return 0;
+}
+
 async function refreshPools() {
   if (Date.now() - state.poolFetchedAt < POOL_CACHE_MS && state.poolsByIdentity.size) return;
 
@@ -392,32 +413,47 @@ async function refreshPools() {
       const eligible = lists
         .filter((pair)=>poolMatchesAsset(pair, asset))
         .filter((pair)=>(finitePositive(pair?.liquidity?.usd) || 0) >= MIN_POOL_LIQUIDITY_USD)
-        .filter((pair)=>(finitePositive(pair?.volume?.h24) || 0) >= MIN_POOL_VOLUME_24H_USD)
-        .sort((a,b)=>(Number(b?.liquidity?.usd)||0)-(Number(a?.liquidity?.usd)||0));
+        .filter((pair)=>(finitePositive(pair?.volume?.h24) || 0) >= MIN_POOL_VOLUME_24H_USD);
 
       if (!eligible.length) continue;
-      const confirmable = eligible.filter((pair)=>
-        Boolean(directDexAdapterFor(pair?.dexId,chainKey) || liFiToolForDexId(pair?.dexId))
-      );
-      const pair = confirmable[0] || eligible[0];
-      const lifiToolKey = liFiToolForDexId(pair?.dexId);
-      const directAdapter = directDexAdapterFor(pair?.dexId,chainKey);
-      next.set(poolIdentity(asset), {
-        chain: chainKey,
-        chainId: chain.chainId,
-        cexSymbol: asset.cexSymbol,
-        tokenAddress: asset.address,
-        quoteAddress: chain.quoteAddress,
-        dexId: pair.dexId,
-        lifiToolKey,
-        directAdapter,
-        pairAddress: pair.pairAddress,
-        priceUsd: finitePositive(pair.priceUsd),
-        liquidityUsd: finitePositive(pair?.liquidity?.usd),
-        volume24hUsd: finitePositive(pair?.volume?.h24),
-        url: pair.url || null,
-        fetchedAt: Date.now(),
-      });
+
+      // A single token can trade on several DEXs. Keeping one pool only was a
+      // coverage bottleneck: a good Aerodrome/QuickSwap/Pancake pool could be
+      // hidden by a larger but economically worse pool on another venue.
+      const bestByDex=new Map();
+      for (const pair of eligible) {
+        const dexKey=String(pair?.dexId||'unknown').toLowerCase();
+        const previous=bestByDex.get(dexKey);
+        if (!previous || (Number(pair?.liquidity?.usd)||0)>(Number(previous?.liquidity?.usd)||0)) {
+          bestByDex.set(dexKey,pair);
+        }
+      }
+
+      const selected=[...bestByDex.values()]
+        .sort((a,b)=>{
+          const rankDiff=poolConfirmationRank(b,chainKey)-poolConfirmationRank(a,chainKey);
+          if (rankDiff) return rankDiff;
+          return (Number(b?.liquidity?.usd)||0)-(Number(a?.liquidity?.usd)||0);
+        })
+        .slice(0,MAX_POOLS_PER_ASSET)
+        .map((pair)=>({
+          chain:chainKey,
+          chainId:chain.chainId,
+          cexSymbol:asset.cexSymbol,
+          tokenAddress:asset.address,
+          quoteAddress:chain.quoteAddress,
+          dexId:pair.dexId,
+          lifiToolKey:liFiToolForDexId(pair?.dexId),
+          directAdapter:directDexAdapterFor(pair?.dexId,chainKey),
+          pairAddress:pair.pairAddress,
+          priceUsd:finitePositive(pair.priceUsd),
+          liquidityUsd:finitePositive(pair?.liquidity?.usd),
+          volume24hUsd:finitePositive(pair?.volume?.h24),
+          url:pair.url||null,
+          fetchedAt:Date.now(),
+        }));
+
+      if (selected.length) next.set(poolIdentity(asset),selected);
     }
   }
 
@@ -521,16 +557,25 @@ async function lifiQuote({asset, direction, amountUnits, allowedExchange}) {
   return quote;
 }
 
+function gasFallbackUsd(chainKey) {
+  if (chainKey==='ethereum') return 5;
+  if (chainKey==='arbitrum') return 0.25;
+  if (chainKey==='base') return 0.15;
+  if (chainKey==='polygon') return 0.10;
+  if (chainKey==='bsc') return 0.15;
+  return 0.50;
+}
+
 function directGasUsd(direct,nativeGasTokenUsd,chainKey) {
   const nativeUsd=finitePositive(nativeGasTokenUsd);
-  if (!nativeUsd) return chainKey==='ethereum'?5:0.25;
+  if (!nativeUsd) return gasFallbackUsd(chainKey);
   try {
     const gasWei=BigInt(direct?.gasEstimate||240_000n)*BigInt(direct?.gasPriceWei||0n);
     const native=Number(gasWei)/1e18;
-    if (!Number.isFinite(native) || native<0) return chainKey==='ethereum'?5:0.25;
+    if (!Number.isFinite(native) || native<0) return gasFallbackUsd(chainKey);
     return native*nativeUsd*1.25;
   } catch {
-    return chainKey==='ethereum'?5:0.25;
+    return gasFallbackUsd(chainKey);
   }
 }
 
@@ -596,10 +641,10 @@ async function executableDexQuote({candidate,amountUnits}) {
   throw new Error(`no_executable_quote_adapter:${directError||pool?.dexId||'unknown'}`);
 }
 
-function nativeEthUsd(snapshot) {
+function marketMidUsd(snapshot,symbol) {
   const values=[];
   for (const books of Object.values(snapshot?.books||{})) {
-    const book=books?.ETHUSDT;
+    const book=books?.[symbol];
     const bid=finitePositive(book?.bids?.[0]?.[0]);
     const ask=finitePositive(book?.asks?.[0]?.[0]);
     if (bid&&ask) values.push((bid+ask)/2);
@@ -609,28 +654,36 @@ function nativeEthUsd(snapshot) {
   return values[Math.floor(values.length/2)];
 }
 
+function nativeGasUsdForAsset(snapshot,asset) {
+  const chain=chainForAsset(asset);
+  return chain?.gasCexSymbol ? marketMidUsd(snapshot,chain.gasCexSymbol) : null;
+}
+
 function preliminaryCandidates(snapshot, budgetUsdt) {
   const candidates = [];
-  const nativeGasTokenUsd=nativeEthUsd(snapshot);
   for (const asset of effectiveAssets()) {
     const identity = poolIdentity(asset);
-    const pool = state.poolsByIdentity.get(identity);
+    const pools = poolsForAsset(asset);
     const tokenMeta = state.tokenMetaByIdentity.get(identity);
-    if (!pool?.priceUsd || !tokenMeta) continue;
+    if (!pools.length || !tokenMeta) continue;
     if (!screeningAllowed(tokenMeta.screeningStatus)) continue;
 
     const cex = bestCexSides(snapshot, asset.cexSymbol);
     if (!cex) continue;
+    const nativeGasTokenUsd=nativeGasUsdForAsset(snapshot,asset);
 
-    const dexMid = pool.priceUsd;
-    const dexBuySpread = ((cex.bestSell.bid / dexMid) - 1) * 100;
-    const dexSellSpread = ((dexMid / cex.bestBuy.ask) - 1) * 100;
+    for (const pool of pools) {
+      if (!pool?.priceUsd) continue;
+      const dexMid = pool.priceUsd;
+      const dexBuySpread = ((cex.bestSell.bid / dexMid) - 1) * 100;
+      const dexSellSpread = ((dexMid / cex.bestBuy.ask) - 1) * 100;
 
-    if (dexBuySpread >= MIN_PRELIMINARY_SPREAD_PCT) {
-      candidates.push({asset,pool,tokenMeta,cex,direction:'dex_to_cex',preliminarySpreadPct:dexBuySpread,budgetUsdt,nativeGasTokenUsd});
-    }
-    if (dexSellSpread >= MIN_PRELIMINARY_SPREAD_PCT) {
-      candidates.push({asset,pool,tokenMeta,cex,direction:'cex_to_dex',preliminarySpreadPct:dexSellSpread,budgetUsdt,nativeGasTokenUsd});
+      if (dexBuySpread >= MIN_PRELIMINARY_SPREAD_PCT) {
+        candidates.push({asset,pool,tokenMeta,cex,direction:'dex_to_cex',preliminarySpreadPct:dexBuySpread,budgetUsdt,nativeGasTokenUsd});
+      }
+      if (dexSellSpread >= MIN_PRELIMINARY_SPREAD_PCT) {
+        candidates.push({asset,pool,tokenMeta,cex,direction:'cex_to_dex',preliminarySpreadPct:dexSellSpread,budgetUsdt,nativeGasTokenUsd});
+      }
     }
   }
 
@@ -974,8 +1027,8 @@ function buildDexFunnel({snapshot,assets,preliminary,toConfirm,confirmed,valid})
   let cexComparable=0;
   for (const asset of assets) {
     const key=exactIdentityKey(asset);
-    const pool=state.poolsByIdentity.get(key);
-    if (!pool) { dropReasons.noLiquidPool+=1; continue; }
+    const pools=poolsForAsset(asset);
+    if (!pools.length) { dropReasons.noLiquidPool+=1; continue; }
     const meta=state.tokenMetaByIdentity.get(key);
     if (!screeningAllowed(meta?.screeningStatus)) { dropReasons.screeningDenied+=1; continue; }
     screenedAllowed+=1;
@@ -996,6 +1049,7 @@ function buildDexFunnel({snapshot,assets,preliminary,toConfirm,confirmed,valid})
     manualIdentities:DEX_ASSET_REGISTRY.length,
     autoVerifiedIdentities:state.autoAssets.length,
     withLiquidPool:state.poolsByIdentity.size,
+    selectedPools:allSelectedPools().length,
     screenedAllowed,
     cexComparable,
     preliminaryRoutes:preliminary.length,
@@ -1021,10 +1075,11 @@ export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
   const directCandidates=strong
     .filter((candidate)=>Boolean(candidate.pool?.directAdapter))
     .slice(0,MAX_DIRECT_CONFIRMATIONS);
-  const directKeys=new Set(directCandidates.map((x)=>`${exactIdentityKey(x.asset)}:${x.direction}`));
+  const routeKey=(x)=>`${exactIdentityKey(x.asset)}:${x.direction}:${normalizeAddress(x.pool?.pairAddress||'')}`;
+  const directKeys=new Set(directCandidates.map(routeKey));
   const fallbackCandidates=strong
     .filter((candidate)=>Boolean(candidate.pool?.lifiToolKey))
-    .filter((candidate)=>!directKeys.has(`${exactIdentityKey(candidate.asset)}:${candidate.direction}`))
+    .filter((candidate)=>!directKeys.has(routeKey(candidate)))
     .slice(0,MAX_FALLBACK_CONFIRMATIONS);
   const toConfirm=[...directCandidates,...fallbackCandidates];
   const confirmed = [];
@@ -1103,10 +1158,12 @@ export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
     manualRegistryAssets:DEX_ASSET_REGISTRY.length,
     autoVerifiedAssets:state.autoAssets.length,
     autoAllowlistCandidates:AUTO_ASSET_ALLOWLIST.length,
-    poolsFound:state.poolsByIdentity.size,
+    poolIdentities:state.poolsByIdentity.size,
+    poolsFound:allSelectedPools().length,
+    maxPoolsPerAsset:MAX_POOLS_PER_ASSET,
     directDex:directDexSnapshot(),
     lifiDexTools:state.toolKeys.length ? state.toolKeys : LIFI_TOOL_FALLBACK,
-    executableDexes:[...new Set([...state.poolsByIdentity.values()].flatMap((pool)=>[pool.directAdapter,pool.lifiToolKey]).filter(Boolean))],
+    executableDexes:[...new Set(allSelectedPools().flatMap((pool)=>[pool.directAdapter,pool.lifiToolKey]).filter(Boolean))],
     funnel,
     preliminaryCount:preliminary.length,
     preliminaryTop5,
@@ -1137,7 +1194,8 @@ export function dexRegistrySnapshot() {
       identitySource:asset.identitySource||'manual_exact_contract',
       screeningStatus:state.tokenMetaByIdentity.get(exactIdentityKey(asset))?.screeningStatus || 'unknown',
       screeningSource:state.tokenMetaByIdentity.get(exactIdentityKey(asset))?.screeningSource || 'not_loaded',
-      pool:state.poolsByIdentity.get(exactIdentityKey(asset)) || null,
+      pool:poolsForAsset(asset)[0] || null,
+      pools:poolsForAsset(asset),
     };
   });
 }
