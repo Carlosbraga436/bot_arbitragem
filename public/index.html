@@ -9,7 +9,7 @@
 <body>
   <main class="shell">
     <header>
-      <div><span class="eyebrow">ENTRE</span><h1>RADAR CRIPTO</h1><p>BINANCE × BYBIT × OKX × GATE.IO × KUCOIN · spot USDT · somente simulação</p></div>
+      <div><span class="eyebrow">ENTRE</span><h1>RADAR CRIPTO</h1><p>5 CEXs + DEXs selecionadas · spot USDT · somente simulação</p></div>
       <button id="reconnect">Reconectar ↻</button>
     </header>
 
@@ -38,7 +38,18 @@
       <div class="tableWrap"><table><thead><tr><th>Par</th><th>Direção</th><th>Spread</th><th>Líquido</th><th>Status</th></tr></thead><tbody id="rows"><tr><td colspan="5">Aguardando…</td></tr></tbody></table></div>
     </section>
 
-    <footer>Sem depósito · sem API key · sem envio de ordens · 5 exchanges · universo USDT dinâmico · O valor selecionado é um teto, não uma obrigação de usar tudo. O radar mantém oportunidades parcialmente executáveis e informa quanto cabe no book visível. Top 5 exige lucro líquido da execução após taxas + reserva; recomposição é cenário separado.</footer>
+    <section class="card hero">
+      <span class="eyebrow">DEX ↔ CEX · BETA SAME-CHAIN</span>
+      <div id="dexBest"><h2>—</h2><p>Inicializando contratos e pools curados…</p></div>
+    </section>
+
+    <section class="card">
+      <div class="sectionHead"><div><h2 id="dexTableTitle">DEX ↔ CEX</h2><p id="dexSummary">Validando contratos exatos…</p></div><div class="badge">CONTRATO + CHAIN ✓</div></div>
+      <div class="costs">DEXs permitidas nesta fase: Uniswap, SushiSwap, Curve, Balancer, PancakeSwap e Camelot, quando disponíveis pela LI.FI. Ethereum e Arbitrum apenas. O token nunca é casado somente por ticker: usamos chainId + endereço exato do contrato + mapeamento explícito para o ativo da CEX. Pools abaixo de US$ 250 mil de liquidez ficam fora. Token marcado como Denied no screening da LI.FI fica bloqueado.</div>
+      <div class="tableWrap"><table><thead><tr><th>Ativo</th><th>Direção</th><th>Spread</th><th>Líquido</th><th>Identidade</th></tr></thead><tbody id="dexRows"><tr><td colspan="5">Aguardando…</td></tr></tbody></table></div>
+    </section>
+
+    <footer>Sem depósito · sem API key · sem envio de ordens · 5 CEXs + DEX beta · universo USDT dinâmico · O valor selecionado é um teto, não uma obrigação de usar tudo. O radar mantém oportunidades parcialmente executáveis e informa quanto cabe no book visível. Top 5 exige lucro líquido da execução após taxas + reserva; recomposição é cenário separado.</footer>
   </main>
   <script type="module" src="/app.js"></script>
 </body>
