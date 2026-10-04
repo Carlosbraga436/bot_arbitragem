@@ -25,8 +25,10 @@ const BYBIT_BASES = ['https://api.bybit.com','https://api.bytick.com'];
 const OKX_BASES = ['https://www.okx.com','https://openapi.okx.com'];
 const GATE_BASES = ['https://api.gateio.ws/api/v4'];
 const KUCOIN_BASES = ['https://api.kucoin.com'];
+const BITGET_BASES = ['https://api.bitget.com'];
+const HTX_BASES = ['https://api.huobi.pro','https://api-aws.huobi.pro'];
 const REQUEST_TIMEOUT_MS = 10_000;
-const APP_VERSION = '0.23.1-recovery.1';
+const APP_VERSION = '0.24.0-recovery.1';
 const RADAR_CACHE_MS = 750;
 
 let runtimePromise = null;
@@ -113,12 +115,41 @@ async function fetchKucoinSpotInstruments() {
   return {base:result.base,items:result.data.data.list};
 }
 
+async function fetchBitgetSpotInstruments() {
+  const result=await fetchFirst(
+    BITGET_BASES,
+    '/api/v3/market/instruments?category=SPOT',
+    (data)=>data?.code==='00000' && Array.isArray(data?.data),
+  );
+  return {base:result.base,items:result.data.data};
+}
+
+async function fetchHtxSpotInstruments() {
+  try {
+    const result=await fetchFirst(
+      HTX_BASES,
+      '/v1/settings/common/market-symbols?symbols=NA',
+      (data)=>data?.status==='ok' && Array.isArray(data?.data),
+    );
+    return {base:result.base,items:result.data};
+  } catch (primaryError) {
+    const fallback=await fetchFirst(
+      HTX_BASES,
+      '/v1/common/symbols',
+      (data)=>data?.status==='ok' && Array.isArray(data?.data),
+    );
+    return {base:fallback.base,items:fallback.data.data,fallback:true,primaryError:primaryError?.message||String(primaryError)};
+  }
+}
+
 async function getCatalog() {
-  const [bybitResult,okxResult,gateResult,kucoinResult]=await Promise.all([
+  const [bybitResult,okxResult,gateResult,kucoinResult,bitgetResult,htxResult]=await Promise.all([
     fetchBybitSpotInstruments(),
     fetchOkxSpotInstruments(),
     fetchGateSpotPairs(),
     fetchKucoinSpotInstruments(),
+    fetchBitgetSpotInstruments(),
+    fetchHtxSpotInstruments(),
   ]);
 
   const candidates=buildMultiExchangeUniverse({
@@ -126,6 +157,8 @@ async function getCatalog() {
     okxSymbols:okxResult.items,
     gateSymbols:gateResult.items,
     kucoinSymbols:kucoinResult.items,
+    bitgetSymbols:bitgetResult.items,
+    htxSymbols:htxResult.items,
   });
   const monitoredSymbols=selectConfirmedSymbols(candidates,MAX_MONITORED_SYMBOLS);
   const monitoredSet=new Set(monitoredSymbols);
@@ -135,6 +168,12 @@ async function getCatalog() {
     .map((x)=>x.symbol);
   const kucoinSymbols=candidates
     .filter((x)=>monitoredSet.has(x.symbol) && x?.venues?.kucoin)
+    .map((x)=>x.symbol);
+  const bitgetSymbols=candidates
+    .filter((x)=>monitoredSet.has(x.symbol) && x?.venues?.bitget)
+    .map((x)=>x.symbol);
+  const htxSymbols=candidates
+    .filter((x)=>monitoredSet.has(x.symbol) && x?.venues?.htx)
     .map((x)=>x.symbol);
 
   const countVenue=(venue)=>candidates.filter((x)=>x?.venues?.[venue]).length;
@@ -148,6 +187,8 @@ async function getCatalog() {
       okx:okxResult.base,
       gate:gateResult.base,
       kucoin:kucoinResult.base,
+      bitget:bitgetResult.base,
+      htx:htxResult.base,
     },
     universeMode:'union_of_public_USDT_catalogs+live_books',
     maxMonitored:MAX_MONITORED_SYMBOLS,
@@ -157,12 +198,16 @@ async function getCatalog() {
       okxActiveUsdt:countVenue('okx'),
       gateActiveUsdt:countVenue('gate'),
       kucoinActiveUsdt:countVenue('kucoin'),
+      bitgetActiveUsdt:countVenue('bitget'),
+      htxActiveUsdt:countVenue('htx'),
       candidateUsdt:candidates.length,
     },
     candidates,
     monitoredSymbols,
     gateSymbols,
     kucoinSymbols,
+    bitgetSymbols,
+    htxSymbols,
     confirmed:candidates.length,
     pending:0,
   };
@@ -180,11 +225,13 @@ async function ensureRuntime() {
         symbols:catalog.monitoredSymbols,
         gateSymbols:catalog.gateSymbols,
         kucoinSymbols:catalog.kucoinSymbols,
+        bitgetSymbols:catalog.bitgetSymbols,
+        htxSymbols:catalog.htxSymbols,
       });
       marketHub.start();
 
       console.log(
-        `[catalog] ${catalog.exchangeUniverse.candidateUsdt} candidatos USDT; monitorando ${catalog.monitoredSymbols.length}; Gate ${catalog.gateSymbols.length}; KuCoin ${catalog.kucoinSymbols.length}`
+        `[catalog] ${catalog.exchangeUniverse.candidateUsdt} candidatos USDT; monitorando ${catalog.monitoredSymbols.length}; Gate ${catalog.gateSymbols.length}; KuCoin ${catalog.kucoinSymbols.length}; Bitget ${catalog.bitgetSymbols.length}; HTX ${catalog.htxSymbols.length}`
       );
 
       const runtime={
@@ -257,6 +304,34 @@ function costsForAsset(asset) {
   };
 }
 
+function venueQuotesForSymbol(booksByExchange,now=Date.now()) {
+  const rows=Object.entries(booksByExchange||{}).map(([exchange,book])=>{
+    const bid=Number(book?.bids?.[0]?.[0]);
+    const ask=Number(book?.asks?.[0]?.[0]);
+    const bidQty=Number(book?.bids?.[0]?.[1]);
+    const askQty=Number(book?.asks?.[0]?.[1]);
+    const ts=Number(book?.ts);
+    if (!(bid>0) || !(ask>0) || !(bidQty>0) || !(askQty>0) || !Number.isFinite(ts)) return null;
+    return {
+      exchange,
+      bid,
+      ask,
+      mid:(bid+ask)/2,
+      bidQty,
+      askQty,
+      ts,
+      ageMs:Math.max(0,now-ts),
+    };
+  }).filter(Boolean);
+  const minAsk=rows.reduce((best,row)=>row.ask<(best?.ask??Infinity)?row:best,null);
+  const maxBid=rows.reduce((best,row)=>row.bid>(best?.bid??-Infinity)?row:best,null);
+  return rows.map((row)=>({
+    ...row,
+    bestBuy:row.exchange===minAsk?.exchange,
+    bestSell:row.exchange===maxBid?.exchange,
+  }));
+}
+
 function evaluateRuntime(runtime,budgetUsdt=100) {
   const snap=runtime.marketHub.snapshot();
   const now=Date.now();
@@ -279,6 +354,7 @@ function evaluateRuntime(runtime,budgetUsdt=100) {
       rules:DEFAULT_RULES,
       now,
     });
+    result.venueQuotes=venueQuotesForSymbol(booksByExchange,now);
 
     if (Number.isFinite(result?.netPnlUsdt) && result?.buyExchange && result?.sellExchange) {
       result.breakEvenPct=
@@ -455,7 +531,7 @@ const server=http.createServer(async(req,res)=>{
         mode:'simulation-only',
         ordersEnabled:false,
         version:APP_VERSION,
-        exchanges:['binance','bybit','okx','gate','kucoin'],
+        exchanges:['binance','bybit','okx','gate','kucoin','bitget','htx'],
         dexRadar:{
           enabled:true,
           mode:'same-chain-read-only',
@@ -517,7 +593,7 @@ const server=http.createServer(async(req,res)=>{
         version:APP_VERSION,
         universeMode:catalog.universeMode,
         sources:catalog.sources,
-        exchanges:['binance','bybit','okx','gate','kucoin'],
+        exchanges:['binance','bybit','okx','gate','kucoin','bitget','htx'],
         feeModel:DEFAULT_COSTS,
         monitoredCount:catalog.monitoredSymbols.length,
         candidateUsdt:catalog.exchangeUniverse.candidateUsdt,
