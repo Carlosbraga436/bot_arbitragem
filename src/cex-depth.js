@@ -13,7 +13,7 @@ async function fetchJson(url, timeoutMs = DEFAULT_TIMEOUT_MS) {
   try {
     const r=await fetch(url,{
       signal:controller.signal,
-      headers:{'user-agent':'radar-cripto-carlos-depth/0.21.2'},
+      headers:{'user-agent':'radar-cripto-carlos-depth/0.24.0'},
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return await r.json();
@@ -43,6 +43,7 @@ export function cexSymbolFormat(exchange, symbol) {
   const base=s.slice(0,-4);
   if (exchange==='okx' || exchange==='kucoin') return `${base}-USDT`;
   if (exchange==='gate') return `${base}_USDT`;
+  if (exchange==='htx') return `${base.toLowerCase()}usdt`;
   return s;
 }
 
@@ -141,6 +142,34 @@ export async function fetchCexDepth(exchange, symbol, limit = 100) {
       ts:Number(data?.data?.time)||Date.now(),
       updateId:data?.data?.sequence??null,
       levels:size,
+    }));
+  }
+
+  if (ex==='bitget') {
+    const lim=Math.min(1000,Math.max(5,Number(limit)||100));
+    const url=`https://api.bitget.com/api/v3/market/orderbook?category=SPOT&symbol=${encodeURIComponent(formatted)}&limit=${lim}`;
+    return fetchFirst([url],(data)=>({
+      exchange:ex,
+      symbol,
+      bids:normalizeLevels(data?.data?.b),
+      asks:normalizeLevels(data?.data?.a),
+      ts:Number(data?.data?.ts)||Number(data?.requestTime)||Date.now(),
+      updateId:null,
+      levels:lim,
+    }));
+  }
+
+  if (ex==='htx') {
+    const lim=Math.min(20,Math.max(5,Number(limit)||20));
+    const url=`https://api.huobi.pro/market/depth?symbol=${encodeURIComponent(formatted)}&type=step0&depth=${lim}`;
+    return fetchFirst([url],(data)=>({
+      exchange:ex,
+      symbol,
+      bids:normalizeLevels(data?.tick?.bids),
+      asks:normalizeLevels(data?.tick?.asks),
+      ts:Number(data?.ts)||Date.now(),
+      updateId:data?.tick?.version??null,
+      levels:lim,
     }));
   }
 
