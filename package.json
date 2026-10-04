@@ -1,6 +1,6 @@
 {
   "name": "radar-cripto-carlos",
-  "version": "0.22.1-recovery.1",
+  "version": "0.23.0-recovery.1",
   "private": true,
   "type": "module",
   "description": "Radar Cripto CEX + DEX same-chain com quote direto read-only, expansão automática por contrato exato em duas fontes, depth CEX, funil diagnóstico e rebalanceamento token+USDT. Somente leitura/simulação.",
