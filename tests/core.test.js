@@ -660,10 +660,11 @@ test('restrição conhecida na perna de USDT bloqueia o rebalanceamento', () => 
 test('expansão automática exige contrato exato em duas fontes e rejeita ambiguidade', () => {
   const allowlist=[{canonicalId:'compound',symbol:'COMP',cexSymbol:'COMPUSDT',chain:'ethereum'}];
   const token={chainId:1,symbol:'COMP',name:'Compound',address:'0xc00e94Cb662C3520282E6f5717214004A7f26888',decimals:18};
+  const settlement={chainId:1,symbol:'USDT',address:DEX_CHAINS.ethereum.quoteAddress,decimals:6};
 
   const accepted=buildAutoAssetRegistry({
     uniswapTokens:[token],
-    lifiTokens:[{...token,address:token.address.toLowerCase()}],
+    lifiTokens:[{...token,address:token.address.toLowerCase()},settlement],
     allowlist,
   });
   assert.equal(accepted.length,1);
@@ -672,14 +673,14 @@ test('expansão automática exige contrato exato em duas fontes e rejeita ambigu
 
   const mismatch=buildAutoAssetRegistry({
     uniswapTokens:[token],
-    lifiTokens:[{...token,address:'0x0000000000000000000000000000000000000001'}],
+    lifiTokens:[{...token,address:'0x0000000000000000000000000000000000000001'},settlement],
     allowlist,
   });
   assert.equal(mismatch.length,0);
 
   const ambiguous=buildAutoAssetRegistry({
     uniswapTokens:[token,{...token,address:'0x0000000000000000000000000000000000000002'}],
-    lifiTokens:[token],
+    lifiTokens:[token,settlement],
     allowlist,
   });
   assert.equal(ambiguous.length,0);
@@ -754,22 +755,30 @@ test('matching de rede CEX não aceita substring acidental de ETH', () => {
 });
 
 
-test('CP23 registra novas redes com quote e identidade explícitos', () => {
+test('CP23 registra novas redes com settlement USDT e gas token explícitos', () => {
   for (const chain of ['base','polygon','bsc']) {
     const spec=DEX_CHAINS[chain];
     assert.ok(spec);
     assert.ok(Number.isInteger(spec.chainId));
+    assert.equal(spec.quoteSymbol,'USDT');
     assert.match(spec.quoteAddress,/^0x[0-9a-fA-F]{40}$/);
+    assert.match(spec.gasCexSymbol,/^[A-Z0-9]+USDT$/);
   }
-  assert.ok(AUTO_ASSET_ALLOWLIST.some((x)=>x.chain==='base'));
-  assert.ok(AUTO_ASSET_ALLOWLIST.some((x)=>x.chain==='polygon'));
-  assert.ok(AUTO_ASSET_ALLOWLIST.some((x)=>x.chain==='bsc'));
+  assert.equal(DEX_CHAINS.base.quoteAddress.toLowerCase(),'0xfde4c96c8593536e31f229ea8f37b2ada2699bb2');
+  assert.equal(DEX_CHAINS.polygon.quoteAddress.toLowerCase(),'0xc2132d05d31c914a87c6611c10748aeb04b58e8f');
+  assert.equal(DEX_CHAINS.polygon.gasCexSymbol,'POLUSDT');
+  assert.equal(DEX_CHAINS.bsc.gasCexSymbol,'BNBUSDT');
+  assert.ok(AUTO_ASSET_ALLOWLIST.filter((x)=>x.chain==='base').length>=20);
+  assert.ok(AUTO_ASSET_ALLOWLIST.filter((x)=>x.chain==='polygon').length>=20);
+  assert.ok(AUTO_ASSET_ALLOWLIST.filter((x)=>x.chain==='bsc').length>=25);
 });
 
-test('CP23 adapters diretos só habilitam redes com contrato conhecido', () => {
+test('CP23 adapters diretos cobrem Uniswap BSC, QuickSwap e PancakeSwap', () => {
   assert.equal(directDexAdapterFor('uniswap-v3','base'),'uniswap_v3_quoter');
   assert.equal(directDexAdapterFor('uniswap-v3','polygon'),'uniswap_v3_quoter');
-  assert.equal(directDexAdapterFor('uniswap-v3','bsc'),null);
+  assert.equal(directDexAdapterFor('uniswap-v3','bsc'),'uniswap_v3_quoter');
+  assert.equal(directDexAdapterFor('quickswap','polygon'),'quickswap_v2_router');
+  assert.equal(directDexAdapterFor('pancakeswap','bsc'),'pancakeswap_v2_router');
 });
 
 test('CP23 aliases CEX das novas redes permanecem exatos', () => {
@@ -778,4 +787,35 @@ test('CP23 aliases CEX das novas redes permanecem exatos', () => {
   assert.equal(chainEntryMatches({chain:'MATIC'},make('polygon')),true);
   assert.equal(chainEntryMatches({chain:'BEP20'},make('bsc')),true);
   assert.equal(chainEntryMatches({chain:'basecamp'},make('base')),false);
+});
+
+
+test('CP23 expansão automática falha fechada quando settlement da rede não existe no LI.FI', () => {
+  const spec={canonicalId:'aerodrome',symbol:'AERO',cexSymbol:'AEROUSDT',chain:'base'};
+  const token={chainId:8453,symbol:'AERO',name:'Aerodrome',address:'0x00000000000000000000000000000000000000a1',decimals:18};
+  const withoutSettlement=buildAutoAssetRegistry({
+    uniswapTokens:[token],
+    lifiTokens:[token],
+    allowlist:[spec],
+  });
+  assert.equal(withoutSettlement.length,0);
+
+  const withSettlement=buildAutoAssetRegistry({
+    uniswapTokens:[token],
+    lifiTokens:[token,{chainId:8453,symbol:'USDT',address:DEX_CHAINS.base.quoteAddress,decimals:6}],
+    allowlist:[spec],
+  });
+  assert.equal(withSettlement.length,1);
+  assert.equal(withSettlement[0].settlementQuoteVerified,true);
+});
+
+test('CP23 calldata V2 suporta rota intermediária sem inferir endereços', () => {
+  const usdt=DEX_CHAINS.polygon.quoteAddress;
+  const wpol='0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270';
+  const token='0x00000000000000000000000000000000000000a2';
+  const data=encodeV2GetAmountsOut({amountIn:1000000n,path:[usdt,wpol,token]});
+  assert.ok(data.startsWith('0xd06ca61f'));
+  const clean=data.slice(10);
+  assert.equal(BigInt('0x'+clean.slice(128,192)),3n);
+  assert.ok(data.toLowerCase().includes(wpol.toLowerCase().slice(2)));
 });
