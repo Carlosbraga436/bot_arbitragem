@@ -9,7 +9,7 @@
 <body>
   <main class="shell">
     <header>
-      <div><span class="eyebrow">ENTRE</span><h1>RADAR CRIPTO</h1><p>5 CEXs + DEXs selecionadas · spot USDT · somente simulação</p></div>
+      <div><span class="eyebrow">ENTRE</span><h1>RADAR CRIPTO</h1><p>7 CEXs + DEXs selecionadas · spot USDT · somente simulação</p></div>
       <button id="reconnect">Reconectar ↻</button>
     </header>
 
@@ -25,6 +25,8 @@
       <article class="card"><div class="statusRow"><b>OKX</b><span id="okxStatus" class="dot pending">Conectando</span></div><small id="okxLast">Última cotação: —</small></article>
       <article class="card"><div class="statusRow"><b>Gate.io</b><span id="gateStatus" class="dot pending">Conectando</span></div><small id="gateLast">Última cotação: —</small></article>
       <article class="card"><div class="statusRow"><b>KuCoin</b><span id="kucoinStatus" class="dot pending">Conectando</span></div><small id="kucoinLast">Última cotação: —</small></article>
+      <article class="card"><div class="statusRow"><b>Bitget</b><span id="bitgetStatus" class="dot pending">Conectando</span></div><small id="bitgetLast">Última cotação: —</small></article>
+      <article class="card"><div class="statusRow"><b>HTX</b><span id="htxStatus" class="dot pending">Conectando</span></div><small id="htxLast">Última cotação: —</small></article>
     </section>
 
     <section class="card hero">
@@ -34,7 +36,7 @@
 
     <section class="card">
       <div class="sectionHead"><div><h2 id="tableTitle">Top 5 oportunidades elegíveis</h2><p id="summary">Descobrindo pares comuns…</p></div><div class="badge" id="identity">0 comuns</div></div>
-      <div class="costs">Taxas taker modeladas: Binance 0,10% · Bybit 0,10% · OKX spot USDT 0,10% · Gate.io 0,10% · KuCoin conforme classe do par (fallback conservador 0,30%) · reserva 0,05% por ponta. A oportunidade entra no Top 5 pelo líquido da execução. A recomposição estimada de 0,50 USDT aparece separadamente como cenário pós-trade. <span id="breakEven"></span></div>
+      <div class="costs">Taxas taker modeladas: Binance 0,10% · Bybit 0,10% · OKX spot USDT 0,10% · Gate.io 0,10% · KuCoin conforme classe do par (fallback conservador 0,30%) · Bitget 0,10% · HTX fallback conservador 0,20% · reserva 0,05% por ponta. Em cada oportunidade, o painel mostra o preço da moeda nas casas com dados recentes: valor central = referência, “Compra” = ask executável e “Venda” = bid executável. A oportunidade entra no Top 5 pelo líquido da execução. <span id="breakEven"></span></div>
       <div class="tableWrap"><table><thead><tr><th>Par</th><th>Direção</th><th>Spread</th><th>Líquido</th><th>Status</th></tr></thead><tbody id="rows"><tr><td colspan="5">Aguardando…</td></tr></tbody></table></div>
     </section>
 
@@ -50,7 +52,7 @@
       <div class="tableWrap"><table><thead><tr><th>Ativo</th><th>Direção</th><th>Spread</th><th>Líquido</th><th>Validação</th></tr></thead><tbody id="dexRows"><tr><td colspan="5">Aguardando…</td></tr></tbody></table></div>
     </section>
 
-    <footer>Sem depósito · sem API key · sem envio de ordens · 5 CEXs + DEX beta · quotes diretos são eth_call somente leitura · expansão automática exige contrato exato em duas fontes · O valor selecionado é um teto, não uma obrigação de usar tudo. Top 5 exige lucro líquido após custos modelados; rebalanceamento é validado separadamente.</footer>
+    <footer>Sem depósito · sem API key · sem envio de ordens · 7 CEXs + DEX beta · Binance, Bybit, OKX, Gate.io, KuCoin, Bitget e HTX · O valor selecionado é um teto, não uma obrigação de usar tudo. Top 5 exige lucro líquido após custos modelados; recomposição e rebalanceamento são exibidos separadamente.</footer>
   </main>
   <script type="module" src="/app.js"></script>
 </body>
