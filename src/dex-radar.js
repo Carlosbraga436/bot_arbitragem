@@ -26,8 +26,9 @@ const MAX_CONFIRMED_CANDIDATES = 1;
 const MIN_CONFIRM_SPREAD_PCT = 0.50;
 const LIFI_SLIPPAGE = 0.005;
 const MIN_EXECUTION_USDT = 10;
-const CAPACITY_SEARCH_STEPS = Object.freeze([1,0.75,0.50,0.35,0.25,0.15,0.10]);
-const CAPACITY_BINARY_STEPS = 3;
+const CAPACITY_SEARCH_STEPS = Object.freeze([1,0.50,0.25,0.10]);
+const CAPACITY_BINARY_STEPS = 2;
+const LIFI_QUOTE_DELAY_MS = 1_100;
 const LIFI_TOOL_FALLBACK = Object.freeze([
   'uniswap',
   'sushiswap',
@@ -215,7 +216,17 @@ function poolIdentity(asset) {
 function liFiToolForDexId(dexId) {
   const id=String(dexId||'').toLowerCase();
   if (!id) return null;
-  return state.toolKeys.find((tool)=>{
+
+  const announced=state.toolKeys.find((tool)=>{
+    const key=String(tool||'').toLowerCase();
+    return key===id || key.includes(id) || id.includes(key);
+  });
+  if (announced) return announced;
+
+  // /tools can be incomplete under the public unauthenticated quota.
+  // Curated fallback is safe because /quote is still constrained by allowExchanges
+  // and failures stay non-executable.
+  return LIFI_TOOL_FALLBACK.find((tool)=>{
     const key=String(tool||'').toLowerCase();
     return key===id || key.includes(id) || id.includes(key);
   }) || null;
@@ -601,7 +612,7 @@ async function findMaximumProfitable({candidate,costs,depth}) {
       break;
     }
     previousHigher=budget;
-    await sleep(180);
+    await sleep(LIFI_QUOTE_DELAY_MS);
   }
 
   if (positive && previousHigher && previousHigher>positive.budgetUsdt) {
@@ -618,7 +629,7 @@ async function findMaximumProfitable({candidate,costs,depth}) {
       } else {
         high=mid;
       }
-      await sleep(180);
+      await sleep(LIFI_QUOTE_DELAY_MS);
     }
   }
 
