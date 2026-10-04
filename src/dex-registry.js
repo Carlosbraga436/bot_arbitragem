@@ -6,6 +6,7 @@ export const DEX_CHAINS = Object.freeze({
     quoteSymbol: 'USDT',
     quoteAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
     quoteDecimals: 6,
+    gasCexSymbol: 'ETHUSDT',
   }),
   arbitrum: Object.freeze({
     chainId: 42161,
@@ -14,22 +15,27 @@ export const DEX_CHAINS = Object.freeze({
     quoteSymbol: 'USDT',
     quoteAddress: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
     quoteDecimals: 6,
+    gasCexSymbol: 'ETHUSDT',
   }),
   base: Object.freeze({
     chainId: 8453,
     dexScreenerChain: 'base',
     name: 'Base',
-    quoteSymbol: 'USDC',
-    quoteAddress: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    quoteSymbol: 'USDT',
+    // L2 Standard Bridged USDT on Base. Keeping USDT as settlement avoids
+    // silently treating USDC and USDT as 1:1 in the PnL model.
+    quoteAddress: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2',
     quoteDecimals: 6,
+    gasCexSymbol: 'ETHUSDT',
   }),
   polygon: Object.freeze({
     chainId: 137,
     dexScreenerChain: 'polygon',
     name: 'Polygon',
     quoteSymbol: 'USDT',
-    quoteAddress: '0xc2132D05D31c914a87C6611C10748AaCBbB58e8F',
+    quoteAddress: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F',
     quoteDecimals: 6,
+    gasCexSymbol: 'POLUSDT',
   }),
   bsc: Object.freeze({
     chainId: 56,
@@ -38,6 +44,7 @@ export const DEX_CHAINS = Object.freeze({
     quoteSymbol: 'USDT',
     quoteAddress: '0x55d398326f99059fF775485246999027B3197955',
     quoteDecimals: 18,
+    gasCexSymbol: 'BNBUSDT',
   }),
 });
 
@@ -134,13 +141,33 @@ export const AUTO_ASSET_ALLOWLIST = Object.freeze([
   { canonicalId:'usd-coin', symbol:'USDC', cexSymbol:'USDCUSDT', chain:'arbitrum' },
   { canonicalId:'dai', symbol:'DAI', cexSymbol:'DAIUSDT', chain:'arbitrum' },
 
-  // Base — only identities that pass the same Uniswap-list + LI.FI exact-contract agreement enter runtime.
+  // Base — candidates are explicit, but only identities that pass the same
+  // Uniswap-list + LI.FI exact-contract agreement enter runtime.
   { canonicalId:'aave', symbol:'AAVE', cexSymbol:'AAVEUSDT', chain:'base' },
   { canonicalId:'aerodrome-finance', symbol:'AERO', cexSymbol:'AEROUSDT', chain:'base' },
   { canonicalId:'virtual-protocol', symbol:'VIRTUAL', cexSymbol:'VIRTUALUSDT', chain:'base' },
   { canonicalId:'degen-base', symbol:'DEGEN', cexSymbol:'DEGENUSDT', chain:'base' },
   { canonicalId:'brett', symbol:'BRETT', cexSymbol:'BRETTUSDT', chain:'base' },
   { canonicalId:'usd-coin', symbol:'USDC', cexSymbol:'USDCUSDT', chain:'base' },
+  { canonicalId:'dai', symbol:'DAI', cexSymbol:'DAIUSDT', chain:'base' },
+  { canonicalId:'chainlink', symbol:'LINK', cexSymbol:'LINKUSDT', chain:'base' },
+  { canonicalId:'uniswap', symbol:'UNI', cexSymbol:'UNIUSDT', chain:'base' },
+  { canonicalId:'compound-governance-token', symbol:'COMP', cexSymbol:'COMPUSDT', chain:'base' },
+  { canonicalId:'curve-dao-token', symbol:'CRV', cexSymbol:'CRVUSDT', chain:'base' },
+  { canonicalId:'sushi', symbol:'SUSHI', cexSymbol:'SUSHIUSDT', chain:'base' },
+  { canonicalId:'balancer', symbol:'BAL', cexSymbol:'BALUSDT', chain:'base' },
+  { canonicalId:'the-graph', symbol:'GRT', cexSymbol:'GRTUSDT', chain:'base' },
+  { canonicalId:'synthetix-network-token', symbol:'SNX', cexSymbol:'SNXUSDT', chain:'base' },
+  { canonicalId:'morpho', symbol:'MORPHO', cexSymbol:'MORPHOUSDT', chain:'base' },
+  { canonicalId:'moonwell', symbol:'WELL', cexSymbol:'WELLUSDT', chain:'base' },
+  { canonicalId:'echelon-prime', symbol:'PRIME', cexSymbol:'PRIMEUSDT', chain:'base' },
+  { canonicalId:'layerzero', symbol:'ZRO', cexSymbol:'ZROUSDT', chain:'base' },
+  { canonicalId:'ondo-finance', symbol:'ONDO', cexSymbol:'ONDOUSDT', chain:'base' },
+  { canonicalId:'ether-fi', symbol:'ETHFI', cexSymbol:'ETHFIUSDT', chain:'base' },
+  { canonicalId:'eigenlayer', symbol:'EIGEN', cexSymbol:'EIGENUSDT', chain:'base' },
+  { canonicalId:'lido-dao', symbol:'LDO', cexSymbol:'LDOUSDT', chain:'base' },
+  { canonicalId:'ethena', symbol:'ENA', cexSymbol:'ENAUSDT', chain:'base' },
+  { canonicalId:'worldcoin', symbol:'WLD', cexSymbol:'WLDUSDT', chain:'base' },
 
   // Polygon
   { canonicalId:'aave', symbol:'AAVE', cexSymbol:'AAVEUSDT', chain:'polygon' },
@@ -151,8 +178,23 @@ export const AUTO_ASSET_ALLOWLIST = Object.freeze([
   { canonicalId:'curve-dao-token', symbol:'CRV', cexSymbol:'CRVUSDT', chain:'polygon' },
   { canonicalId:'usd-coin', symbol:'USDC', cexSymbol:'USDCUSDT', chain:'polygon' },
   { canonicalId:'dai', symbol:'DAI', cexSymbol:'DAIUSDT', chain:'polygon' },
+  { canonicalId:'quickswap', symbol:'QUICK', cexSymbol:'QUICKUSDT', chain:'polygon' },
+  { canonicalId:'aavegotchi', symbol:'GHST', cexSymbol:'GHSTUSDT', chain:'polygon' },
+  { canonicalId:'balancer', symbol:'BAL', cexSymbol:'BALUSDT', chain:'polygon' },
+  { canonicalId:'compound-governance-token', symbol:'COMP', cexSymbol:'COMPUSDT', chain:'polygon' },
+  { canonicalId:'synthetix-network-token', symbol:'SNX', cexSymbol:'SNXUSDT', chain:'polygon' },
+  { canonicalId:'woo-network', symbol:'WOO', cexSymbol:'WOOUSDT', chain:'polygon' },
+  { canonicalId:'the-sandbox', symbol:'SAND', cexSymbol:'SANDUSDT', chain:'polygon' },
+  { canonicalId:'decentraland', symbol:'MANA', cexSymbol:'MANAUSDT', chain:'polygon' },
+  { canonicalId:'polygon-ecosystem-token', symbol:'POL', cexSymbol:'POLUSDT', chain:'polygon' },
+  { canonicalId:'1inch', symbol:'1INCH', cexSymbol:'1INCHUSDT', chain:'polygon' },
+  { canonicalId:'dodo', symbol:'DODO', cexSymbol:'DODOUSDT', chain:'polygon' },
+  { canonicalId:'api3', symbol:'API3', cexSymbol:'API3USDT', chain:'polygon' },
+  { canonicalId:'mask-network', symbol:'MASK', cexSymbol:'MASKUSDT', chain:'polygon' },
 
-  // BNB Chain
+  // BNB Chain. Wrapped/peg representations only become observable when both
+  // token sources agree on the exact chain contract; CEX network verification
+  // remains a separate rebalance gate.
   { canonicalId:'chainlink', symbol:'LINK', cexSymbol:'LINKUSDT', chain:'bsc' },
   { canonicalId:'uniswap', symbol:'UNI', cexSymbol:'UNIUSDT', chain:'bsc' },
   { canonicalId:'aave', symbol:'AAVE', cexSymbol:'AAVEUSDT', chain:'bsc' },
@@ -160,6 +202,29 @@ export const AUTO_ASSET_ALLOWLIST = Object.freeze([
   { canonicalId:'pancakeswap-token', symbol:'CAKE', cexSymbol:'CAKEUSDT', chain:'bsc' },
   { canonicalId:'1inch', symbol:'1INCH', cexSymbol:'1INCHUSDT', chain:'bsc' },
   { canonicalId:'usd-coin', symbol:'USDC', cexSymbol:'USDCUSDT', chain:'bsc' },
+  { canonicalId:'dai', symbol:'DAI', cexSymbol:'DAIUSDT', chain:'bsc' },
+  { canonicalId:'venus', symbol:'XVS', cexSymbol:'XVSUSDT', chain:'bsc' },
+  { canonicalId:'trust-wallet-token', symbol:'TWT', cexSymbol:'TWTUSDT', chain:'bsc' },
+  { canonicalId:'floki', symbol:'FLOKI', cexSymbol:'FLOKIUSDT', chain:'bsc' },
+  { canonicalId:'thena', symbol:'THE', cexSymbol:'THEUSDT', chain:'bsc' },
+  { canonicalId:'lista-dao', symbol:'LISTA', cexSymbol:'LISTAUSDT', chain:'bsc' },
+  { canonicalId:'alpaca-finance', symbol:'ALPACA', cexSymbol:'ALPACAUSDT', chain:'bsc' },
+  { canonicalId:'biswap', symbol:'BSW', cexSymbol:'BSWUSDT', chain:'bsc' },
+  { canonicalId:'dodo', symbol:'DODO', cexSymbol:'DODOUSDT', chain:'bsc' },
+  { canonicalId:'banana-gun', symbol:'BANANA', cexSymbol:'BANANAUSDT', chain:'bsc' },
+  { canonicalId:'highstreet', symbol:'HIGH', cexSymbol:'HIGHUSDT', chain:'bsc' },
+  { canonicalId:'cyberconnect', symbol:'CYBER', cexSymbol:'CYBERUSDT', chain:'bsc' },
+  { canonicalId:'sushi', symbol:'SUSHI', cexSymbol:'SUSHIUSDT', chain:'bsc' },
+  { canonicalId:'compound-governance-token', symbol:'COMP', cexSymbol:'COMPUSDT', chain:'bsc' },
+  { canonicalId:'synthetix-network-token', symbol:'SNX', cexSymbol:'SNXUSDT', chain:'bsc' },
+  { canonicalId:'pendle', symbol:'PENDLE', cexSymbol:'PENDLEUSDT', chain:'bsc' },
+  { canonicalId:'layerzero', symbol:'ZRO', cexSymbol:'ZROUSDT', chain:'bsc' },
+  { canonicalId:'ondo-finance', symbol:'ONDO', cexSymbol:'ONDOUSDT', chain:'bsc' },
+  { canonicalId:'ether-fi', symbol:'ETHFI', cexSymbol:'ETHFIUSDT', chain:'bsc' },
+  { canonicalId:'ethena', symbol:'ENA', cexSymbol:'ENAUSDT', chain:'bsc' },
+  { canonicalId:'woo-network', symbol:'WOO', cexSymbol:'WOOUSDT', chain:'bsc' },
+  { canonicalId:'mask-network', symbol:'MASK', cexSymbol:'MASKUSDT', chain:'bsc' },
+  { canonicalId:'api3', symbol:'API3', cexSymbol:'API3USDT', chain:'bsc' },
 ]);
 
 export function normalizeAddress(address) {
