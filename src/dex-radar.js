@@ -220,37 +220,47 @@ async function refreshPools() {
   if (Date.now() - state.poolFetchedAt < POOL_CACHE_MS && state.poolsByIdentity.size) return;
 
   const next = new Map();
+  const byChain = new Map();
 
   for (const asset of DEX_ASSET_REGISTRY) {
     const chain = chainForAsset(asset);
     if (!chain) continue;
+    if (!byChain.has(asset.chain)) byChain.set(asset.chain,[]);
+    byChain.get(asset.chain).push(asset);
+  }
 
-    const url = `${DEXSCREENER_BASE}/token-pairs/v1/${chain.dexScreenerChain}/${asset.address}`;
+  for (const [chainKey,assets] of byChain.entries()) {
+    const chain = chainForAsset(assets[0]);
+    const tokenAddresses = assets.map((asset)=>asset.address).join(',');
+    const url = `${DEXSCREENER_BASE}/tokens/v1/${chain.dexScreenerChain}/${tokenAddresses}`;
     const pairs = await fetchJson(url,10_000,3);
     const list = Array.isArray(pairs) ? pairs : [];
-    await sleep(250);
 
-    const eligible = list
-      .filter((pair)=>poolMatchesAsset(pair, asset))
-      .filter((pair)=>(finitePositive(pair?.liquidity?.usd) || 0) >= MIN_POOL_LIQUIDITY_USD)
-      .sort((a,b)=>(Number(b?.liquidity?.usd)||0)-(Number(a?.liquidity?.usd)||0));
+    for (const asset of assets) {
+      const eligible = list
+        .filter((pair)=>poolMatchesAsset(pair, asset))
+        .filter((pair)=>(finitePositive(pair?.liquidity?.usd) || 0) >= MIN_POOL_LIQUIDITY_USD)
+        .sort((a,b)=>(Number(b?.liquidity?.usd)||0)-(Number(a?.liquidity?.usd)||0));
 
-    if (!eligible.length) continue;
-    const pair = eligible[0];
-    next.set(poolIdentity(asset), {
-      chain: asset.chain,
-      chainId: chain.chainId,
-      cexSymbol: asset.cexSymbol,
-      tokenAddress: asset.address,
-      quoteAddress: chain.quoteAddress,
-      dexId: pair.dexId,
-      pairAddress: pair.pairAddress,
-      priceUsd: finitePositive(pair.priceUsd),
-      liquidityUsd: finitePositive(pair?.liquidity?.usd),
-      volume24hUsd: finitePositive(pair?.volume?.h24),
-      url: pair.url || null,
-      fetchedAt: Date.now(),
-    });
+      if (!eligible.length) continue;
+      const pair = eligible[0];
+      next.set(poolIdentity(asset), {
+        chain: chainKey,
+        chainId: chain.chainId,
+        cexSymbol: asset.cexSymbol,
+        tokenAddress: asset.address,
+        quoteAddress: chain.quoteAddress,
+        dexId: pair.dexId,
+        pairAddress: pair.pairAddress,
+        priceUsd: finitePositive(pair.priceUsd),
+        liquidityUsd: finitePositive(pair?.liquidity?.usd),
+        volume24hUsd: finitePositive(pair?.volume?.h24),
+        url: pair.url || null,
+        fetchedAt: Date.now(),
+      });
+    }
+
+    await sleep(300);
   }
 
   state.poolsByIdentity = next;
