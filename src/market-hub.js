@@ -410,9 +410,6 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     };
 
     ws.onclose=(event)=>{
-      const heartbeat=gateHeartbeatTimers.get(socketIndex);
-      if (heartbeat) clearInterval(heartbeat);
-      gateHeartbeatTimers.delete(socketIndex);
       if (stopped) return;
       if (binanceSockets.get('book')===ws) binanceSockets.delete('book');
       logger.warn('[market] Binance bookTicker WS desconectado',event?.code);
