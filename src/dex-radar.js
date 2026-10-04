@@ -1064,6 +1064,25 @@ function buildDexFunnel({snapshot,assets,preliminary,toConfirm,confirmed,valid})
   };
 }
 
+function coverageByChain({assets,preliminary,valid}) {
+  const pools=allSelectedPools();
+  const strong=preliminary.filter((x)=>x.preliminarySpreadPct>=MIN_CONFIRM_SPREAD_PCT);
+  const out={};
+  for (const [chainKey,spec] of Object.entries(DEX_CHAINS)) {
+    out[chainKey]={
+      name:spec.name,
+      settlement:spec.quoteSymbol,
+      identities:assets.filter((x)=>x.chain===chainKey).length,
+      pools:pools.filter((x)=>x.chain===chainKey).length,
+      preliminary:preliminary.filter((x)=>x.asset?.chain===chainKey).length,
+      strong:strong.filter((x)=>x.asset?.chain===chainKey).length,
+      confirmed:valid.filter((x)=>x.chain===spec.name).length,
+      positive:valid.filter((x)=>x.chain===spec.name && x.eligible).length,
+    };
+  }
+  return out;
+}
+
 export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
   await refreshTools().catch(()=>{});
   await refreshAutoRegistry();
@@ -1144,6 +1163,7 @@ export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
   }));
 
   const funnel=buildDexFunnel({snapshot,assets,preliminary,toConfirm,confirmed,valid});
+  const chainCoverage=coverageByChain({assets,preliminary,valid});
 
   return {
     generatedAt:Date.now(),
@@ -1161,6 +1181,7 @@ export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
     poolIdentities:state.poolsByIdentity.size,
     poolsFound:allSelectedPools().length,
     maxPoolsPerAsset:MAX_POOLS_PER_ASSET,
+    coverageByChain:chainCoverage,
     directDex:directDexSnapshot(),
     lifiDexTools:state.toolKeys.length ? state.toolKeys : LIFI_TOOL_FALLBACK,
     executableDexes:[...new Set(allSelectedPools().flatMap((pool)=>[pool.directAdapter,pool.lifiToolKey]).filter(Boolean))],
