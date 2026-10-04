@@ -1,9 +1,9 @@
 {
   "name": "radar-cripto-carlos",
-  "version": "0.23.1-recovery.1",
+  "version": "0.24.0-recovery.1",
   "private": true,
   "type": "module",
-  "description": "Radar Cripto CEX + DEX same-chain em 5 redes, multi-pool, quote direto read-only, expansão por contrato exato em duas fontes, depth CEX e rebalanceamento token+USDT. Somente leitura/simulação.",
+  "description": "Radar Cripto com 7 CEXs + DEX same-chain em 5 redes, mapa de preços por corretora, multi-pool, depth e custos conservadores. Somente leitura/simulação.",
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
