@@ -26,7 +26,7 @@ const OKX_BASES = ['https://www.okx.com','https://openapi.okx.com'];
 const GATE_BASES = ['https://api.gateio.ws/api/v4'];
 const KUCOIN_BASES = ['https://api.kucoin.com'];
 const REQUEST_TIMEOUT_MS = 10_000;
-const APP_VERSION = '0.20.0-recovery.1';
+const APP_VERSION = '0.21.0-recovery.1';
 const RADAR_CACHE_MS = 750;
 
 let runtimePromise = null;
@@ -218,6 +218,8 @@ async function ensureRuntime() {
             preliminaryCount:dex.preliminaryCount,
             preliminaryTop5:dex.preliminaryTop5,
             confirmedCount:dex.confirmedCount,
+            depthConfirmedCount:dex.depthConfirmedCount,
+            transferVerifiedCount:dex.transferVerifiedCount,
             positiveCount:dex.positiveCount,
             top5:dex.top5,
             nearest5:dex.nearest5,
