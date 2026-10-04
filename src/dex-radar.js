@@ -210,10 +210,13 @@ function poolMatchesAsset(pair, asset) {
   const chain = chainForAsset(asset);
   if (!chain) return false;
   if (!isCuratedDexId(pair?.dexId)) return false;
+
+  // DEX Screener priceUsd refers to the base token. We therefore require the
+  // exact registered token contract to be the base token, but we do NOT require
+  // the pool quote token to be USDT. Executability is confirmed separately by
+  // an exact same-chain USDT <-> token quote.
   const baseAddress = normalizeAddress(pair?.baseToken?.address);
-  const quoteAddress = normalizeAddress(pair?.quoteToken?.address);
-  return baseAddress === normalizeAddress(asset.address)
-    && quoteAddress === normalizeAddress(chain.quoteAddress);
+  return baseAddress === normalizeAddress(asset.address);
 }
 
 async function refreshPools() {
@@ -308,14 +311,35 @@ function quoteIdentityMatches(quote, asset, direction) {
     && toAddress === normalizeAddress(chain.quoteAddress);
 }
 
-async function lifiQuote({asset, direction, amountUnits}) {
-  await refreshTools();
-  if (!state.toolKeys.length) throw new Error('no_curated_lifi_dex_tools');
+function quoteToolCandidates(quote) {
+  const out = [];
+  const push = (value) => {
+    if (typeof value === 'string' && value.trim()) out.push(value.trim());
+  };
 
+  push(quote?.tool);
+  push(quote?.toolDetails?.key);
+  push(quote?.toolDetails?.name);
+
+  for (const step of quote?.includedSteps || []) {
+    push(step?.tool);
+    push(step?.toolDetails?.key);
+    push(step?.toolDetails?.name);
+  }
+
+  return [...new Set(out)];
+}
+
+function curatedQuoteTool(quote) {
+  const candidates = quoteToolCandidates(quote);
+  return candidates.find((tool)=>isCuratedDexId(tool)) || null;
+}
+
+async function lifiQuote({asset, direction, amountUnits}) {
   const chain = chainForAsset(asset);
   const fromToken = direction === 'dex_to_cex' ? chain.quoteAddress : asset.address;
   const toToken = direction === 'dex_to_cex' ? asset.address : chain.quoteAddress;
-  const key = [chain.chainId,normalizeAddress(fromToken),normalizeAddress(toToken),String(amountUnits),state.toolKeys.join(',')].join(':');
+  const key = [chain.chainId,normalizeAddress(fromToken),normalizeAddress(toToken),String(amountUnits)].join(':');
   const cached = state.quoteCache.get(key);
   if (cached && Date.now()-cached.fetchedAt < QUOTE_CACHE_MS) return cached.quote;
 
@@ -329,9 +353,16 @@ async function lifiQuote({asset, direction, amountUnits}) {
     fromAmount: String(amountUnits),
     slippage: String(LIFI_SLIPPAGE),
     order: 'RECOMMENDED',
-    allowExchanges: state.toolKeys.join(','),
   });
+
   const quote = await fetchJson(`${LIFI_BASE}/quote?${params.toString()}`, 12_000, 3);
+  const tool = curatedQuoteTool(quote);
+  if (!tool) {
+    const seen = quoteToolCandidates(quote).join(',') || 'unknown';
+    throw new Error(`uncurated_lifi_route:${seen}`);
+  }
+
+  quote.__curatedDexTool = tool;
   state.quoteCache.set(key,{quote,fetchedAt:Date.now()});
   return quote;
 }
@@ -399,10 +430,10 @@ async function confirmCandidate(candidate, costs) {
       sameAssetVerified:true,
       identityMethod:'manual_cex_mapping+chainId+exact_contract+lifi_quote_echo',
       screeningStatus:tokenMeta.screeningStatus,
-      dex:quote?.toolDetails?.name || quote?.tool || pool.dexId,
-      dexTool:quote?.tool || null,
+      dex:quote?.__curatedDexTool || quote?.toolDetails?.name || quote?.tool || pool.dexId,
+      dexTool:quote?.__curatedDexTool || quote?.tool || null,
       cex:cex.bestSell.exchange,
-      buyVenue:quote?.toolDetails?.name || quote?.tool || pool.dexId,
+      buyVenue:quote?.__curatedDexTool || quote?.toolDetails?.name || quote?.tool || pool.dexId,
       sellVenue:cex.bestSell.exchange,
       grossSpreadPct:((sold.quoteReceived/budgetUsdt)-1)*100,
       budgetUsdt,
@@ -453,11 +484,11 @@ async function confirmCandidate(candidate, costs) {
     sameAssetVerified:true,
     identityMethod:'manual_cex_mapping+chainId+exact_contract+lifi_quote_echo',
     screeningStatus:tokenMeta.screeningStatus,
-    dex:quote?.toolDetails?.name || quote?.tool || pool.dexId,
-    dexTool:quote?.tool || null,
+    dex:quote?.__curatedDexTool || quote?.toolDetails?.name || quote?.tool || pool.dexId,
+    dexTool:quote?.__curatedDexTool || quote?.tool || null,
     cex:cex.bestBuy.exchange,
     buyVenue:cex.bestBuy.exchange,
-    sellVenue:quote?.toolDetails?.name || quote?.tool || pool.dexId,
+    sellVenue:quote?.__curatedDexTool || quote?.toolDetails?.name || quote?.tool || pool.dexId,
     grossSpreadPct:((stableOutMin/bought.quoteSpent)-1)*100,
     budgetUsdt,
     executableBudgetUsdt:bought.quoteSpent,
@@ -482,7 +513,8 @@ async function confirmCandidate(candidate, costs) {
 
 export async function buildDexRadar({snapshot,budgetUsdt,costsForSymbol}) {
   validateRegistry();
-  await Promise.all([refreshPools(),refreshTokenMetadata(),refreshTools()]);
+  await Promise.all([refreshPools(),refreshTokenMetadata()]);
+  await refreshTools().catch(()=>{});
   const preliminary = preliminaryCandidates(snapshot,budgetUsdt);
   const confirmed = [];
 
