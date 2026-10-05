@@ -272,6 +272,14 @@ async function ensureRuntime() {
       console.log(
         `[catalog] ${catalog.exchangeUniverse.candidateUsdt} candidatos USDT; monitorando ${catalog.monitoredSymbols.length}; Gate ${catalog.gateSymbols.length}; KuCoin ${catalog.kucoinSymbols.length}; Bitget ${catalog.bitgetSymbols.length}; HTX ${catalog.htxSymbols.length}`
       );
+      console.log(
+        '[order-rules]',
+        JSON.stringify({
+          coverage:catalog.orderRulesCoverage,
+          binanceSource:catalog.sources.binanceOrderRules,
+          binanceError:catalog.orderRulesBinanceError||null,
+        }),
+      );
 
       const runtime={
         catalog,
