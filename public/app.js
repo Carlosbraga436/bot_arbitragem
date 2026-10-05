@@ -90,7 +90,10 @@ function rankingFor(data){
   const signals=Array.isArray(data?.signals)?data.signals:[];
   const nearest=Array.isArray(data?.nearest5)?data.nearest5:[];
   const confirmedKeys=new Set(confirmed.map((r)=>routeKey(r)));
-  const mixed=[...confirmed,...signals.filter((r)=>!confirmedKeys.has(routeKey(r)))];
+  const signalRows=signals.filter((r)=>!confirmedKeys.has(routeKey(r)));
+  const usedKeys=new Set([...confirmed,...signalRows].map((r)=>routeKey(r)));
+  const fallbackRows=nearest.filter((r)=>!usedKeys.has(routeKey(r)));
+  const mixed=[...confirmed,...signalRows,...fallbackRows];
   const rows=mixed.length?mixed:nearest;
   return {
     positives:confirmed,
