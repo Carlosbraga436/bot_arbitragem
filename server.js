@@ -16,6 +16,7 @@ import {
   topPositive,
 } from './src/core.js';
 import { buildDexRadar, dexRegistrySnapshot } from './src/dex-radar.js';
+import { createRealityGate } from './src/reality-gate.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
@@ -28,7 +29,7 @@ const KUCOIN_BASES = ['https://api.kucoin.com'];
 const BITGET_BASES = ['https://api.bitget.com'];
 const HTX_BASES = ['https://api.huobi.pro','https://api-aws.huobi.pro'];
 const REQUEST_TIMEOUT_MS = 10_000;
-const APP_VERSION = '0.26.0-recovery.1';
+const APP_VERSION = '0.27.0-recovery.1';
 const RADAR_CACHE_MS = 750;
 
 let runtimePromise = null;
@@ -239,6 +240,7 @@ async function ensureRuntime() {
         marketHub,
         bySymbol:new Map(catalog.candidates.map((x)=>[x.symbol,x])),
         radarCache:new Map(),
+        realityGate:createRealityGate(),
         dexRadarCache:new Map(),
         dexRadarInFlight:new Map(),
       };
@@ -388,8 +390,25 @@ function radarSnapshot(runtime,budgetUsdt=100) {
   const evaluated=evaluateRuntime(runtime,budget);
   const finite=evaluated.results.filter((r)=>Number.isFinite(r?.netPnlUsdt));
   const allPositives=evaluated.results
-    .filter((r)=>r?.eligible && Number.isFinite(r?.netPnlUsdt) && r.netPnlUsdt>0);
-  const positives=topPositive(allPositives,5);
+    .filter((r)=>r?.eligible && Number.isFinite(r?.netPnlUsdt) && r.netPnlUsdt>0)
+    .sort((a,b)=>(b.netPnlUsdt??-Infinity)-(a.netPnlUsdt??-Infinity));
+
+  const broadCandidates=allPositives.slice(0,12);
+  runtime.realityGate.kick(broadCandidates,{
+    budgetUsdt:budget,
+    contextForRoute:(route)=>{
+      const asset=runtime.bySymbol.get(route.symbol);
+      return {
+        asset,
+        costs:costsForAsset(asset),
+      };
+    },
+  });
+
+  const confirmedTop5=runtime.realityGate.confirmed(broadCandidates,budget);
+  const signals=runtime.realityGate.signals(broadCandidates,budget);
+  const realityGate=runtime.realityGate.stats(broadCandidates,budget);
+
   const venueOpportunityCounts={};
   for (const route of allPositives) {
     for (const venue of [route.buyExchange,route.sellExchange]) {
@@ -397,9 +416,11 @@ function radarSnapshot(runtime,budgetUsdt=100) {
       venueOpportunityCounts[venue]=(venueOpportunityCounts[venue]||0)+1;
     }
   }
+
   const newVenuePositives=allPositives
     .filter((route)=>['bitget','htx'].includes(route.buyExchange)||['bitget','htx'].includes(route.sellExchange))
     .sort((a,b)=>(b.netPnlUsdt??-Infinity)-(a.netPnlUsdt??-Infinity));
+
   const nearest=[...finite]
     .filter((r)=>!r?.eligible)
     .sort((a,b)=>(b.netPnlUsdt??-Infinity)-(a.netPnlUsdt??-Infinity))
@@ -421,16 +442,30 @@ function radarSnapshot(runtime,budgetUsdt=100) {
     pairsWith2PlusVenues:evaluated.pairsWith2PlusVenues,
     liquidResults:finite.length,
     positiveNet:allPositives.length,
+    confirmedCount:confirmedTop5.length,
+    signalCount:signals.length,
     positiveByVenue:venueOpportunityCounts,
     newVenuePositiveCount:newVenuePositives.length,
     topNewVenueRoute:newVenuePositives[0]||null,
-    top5:positives,
+    top5:confirmedTop5,
+    signals,
     nearest5:nearest,
+    realityGate,
     reasonCounts,
+    executionModel:{
+      mode:'prepositioned_inventory',
+      label:'Saldo pré-posicionado',
+      simultaneousExecutionAssumed:true,
+      transferModeVerified:false,
+      orderRulesVerified:false,
+      fillGuaranteed:false,
+    },
     safety:{
       simulationOnly:true,
       ordersEnabled:false,
       transferabilityVerified:false,
+      depthConfirmationRequired:true,
+      persistenceConfirmations:realityGate.requiredStreak,
       anomalyGuardPct:DEFAULT_RULES.maxUnverifiedGrossSpreadPct,
       venueDeviationGuardPct:DEFAULT_RULES.maxVenueDeviationPct,
     },
@@ -472,7 +507,7 @@ async function dexRadarSnapshot(runtime,budgetUsdt=100) {
 
 function marketDiagnostics(runtime,budgetUsdt=100) {
   const radar=radarSnapshot(runtime,budgetUsdt);
-  const candidates=[...radar.top5,...radar.nearest5];
+  const candidates=[...radar.top5,...(radar.signals||[]),...radar.nearest5];
   const topGross=[...candidates]
     .filter((r)=>Number.isFinite(r?.grossPnlUsdt))
     .sort((a,b)=>(b.grossPnlUsdt??-Infinity)-(a.grossPnlUsdt??-Infinity))[0]||null;
@@ -488,6 +523,9 @@ function marketDiagnostics(runtime,budgetUsdt=100) {
     pairsWith2PlusVenues:radar.pairsWith2PlusVenues,
     finiteResults:radar.liquidResults,
     positiveNet:radar.positiveNet,
+    confirmedCount:radar.confirmedCount,
+    signalCount:radar.signalCount,
+    realityGate:radar.realityGate,
     positiveByVenue:radar.positiveByVenue,
     newVenuePositiveCount:radar.newVenuePositiveCount,
     topNewVenueRoute:radar.topNewVenueRoute ? {
@@ -557,6 +595,14 @@ const server=http.createServer(async(req,res)=>{
         ordersEnabled:false,
         version:APP_VERSION,
         exchanges:['binance','bybit','okx','gate','kucoin','bitget','htx'],
+        realityGate:{
+          enabled:true,
+          depthConfirmation:true,
+          persistenceConfirmations:3,
+          executionMode:'prepositioned_inventory',
+          fillGuaranteed:false,
+          transferModeVerified:false,
+        },
         dexRadar:{
           enabled:true,
           mode:'same-chain-read-only',
