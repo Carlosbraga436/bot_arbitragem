@@ -113,7 +113,8 @@ function renderRadar(data) {
     `${Number(data?.monitored||0).toLocaleString('pt-BR')} sondados · `+
     `${Number(data?.pairsWith2PlusVenues||0).toLocaleString('pt-BR')} com cotação em 2+ casas · `+
     `${Number(data?.liquidResults||0).toLocaleString('pt-BR')} rotas avaliáveis com até ${state.budget.toLocaleString('pt-BR')} USDT · `+
-    `${Number(data?.positiveNet||0)} elegíveis`;
+    `${Number(data?.positiveNet||0)} elegíveis`+
+    (Number(data?.newVenuePositiveCount||0)>0?` · ${Number(data.newVenuePositiveCount)} com Bitget/HTX`:'');
 
   $('breakEven').textContent='O breakeven varia conforme a direção e as taxas aplicáveis ao par em cada exchange.';
 
