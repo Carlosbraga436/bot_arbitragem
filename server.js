@@ -28,7 +28,7 @@ const KUCOIN_BASES = ['https://api.kucoin.com'];
 const BITGET_BASES = ['https://api.bitget.com'];
 const HTX_BASES = ['https://api.huobi.pro','https://api-aws.huobi.pro'];
 const REQUEST_TIMEOUT_MS = 10_000;
-const APP_VERSION = '0.24.0-recovery.1';
+const APP_VERSION = '0.26.0-recovery.1';
 const RADAR_CACHE_MS = 750;
 
 let runtimePromise = null;
