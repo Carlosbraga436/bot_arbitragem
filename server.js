@@ -17,11 +17,13 @@ import {
 } from './src/core.js';
 import { buildDexRadar, dexRegistrySnapshot } from './src/dex-radar.js';
 import { createRealityGate } from './src/reality-gate.js';
+import { buildOrderRulesIndex } from './src/order-rules.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
 const PORT = Number(process.env.PORT || 8787);
 
+const BINANCE_REST_BASES = ['https://data-api.binance.vision','https://api-gcp.binance.com','https://api1.binance.com','https://api2.binance.com'];
 const BYBIT_BASES = ['https://api.bybit.com','https://api.bytick.com'];
 const OKX_BASES = ['https://www.okx.com','https://openapi.okx.com'];
 const GATE_BASES = ['https://api.gateio.ws/api/v4'];
@@ -29,7 +31,7 @@ const KUCOIN_BASES = ['https://api.kucoin.com'];
 const BITGET_BASES = ['https://api.bitget.com'];
 const HTX_BASES = ['https://api.huobi.pro','https://api-aws.huobi.pro'];
 const REQUEST_TIMEOUT_MS = 10_000;
-const APP_VERSION = '0.27.0-recovery.1';
+const APP_VERSION = '0.28.0-recovery.1';
 const RADAR_CACHE_MS = 750;
 
 let runtimePromise = null;
@@ -69,6 +71,23 @@ async function fetchFirst(bases,path,validate=()=>true) {
     }
   }
   throw new Error(errors.join(' | '));
+}
+
+async function fetchBinanceSpotInstruments() {
+  try {
+    const result=await fetchFirst(
+      BINANCE_REST_BASES,
+      '/api/v3/exchangeInfo',
+      (data)=>Array.isArray(data?.symbols),
+    );
+    return {
+      base:result.base,
+      items:result.data.symbols.filter((x)=>x?.status==='TRADING' && x?.quoteAsset==='USDT'),
+      error:null,
+    };
+  } catch (error) {
+    return {base:null,items:[],error:error?.message||String(error)};
+  }
 }
 
 async function fetchBybitSpotInstruments() {
@@ -144,7 +163,8 @@ async function fetchHtxSpotInstruments() {
 }
 
 async function getCatalog() {
-  const [bybitResult,okxResult,gateResult,kucoinResult,bitgetResult,htxResult]=await Promise.all([
+  const [binanceResult,bybitResult,okxResult,gateResult,kucoinResult,bitgetResult,htxResult]=await Promise.all([
+    fetchBinanceSpotInstruments(),
     fetchBybitSpotInstruments(),
     fetchOkxSpotInstruments(),
     fetchGateSpotPairs(),
@@ -154,6 +174,16 @@ async function getCatalog() {
   ]);
 
   const candidates=buildMultiExchangeUniverse({
+    bybitSymbols:bybitResult.items,
+    okxSymbols:okxResult.items,
+    gateSymbols:gateResult.items,
+    kucoinSymbols:kucoinResult.items,
+    bitgetSymbols:bitgetResult.items,
+    htxSymbols:htxResult.items,
+  });
+
+  const orderRulesIndex=buildOrderRulesIndex({
+    binanceSymbols:binanceResult.items,
     bybitSymbols:bybitResult.items,
     okxSymbols:okxResult.items,
     gateSymbols:gateResult.items,
@@ -179,11 +209,12 @@ async function getCatalog() {
 
   const countVenue=(venue)=>candidates.filter((x)=>x?.venues?.[venue]).length;
 
-  return {
+  const catalog={
     generatedAt:Date.now(),
     version:APP_VERSION,
     sources:{
       binance:'live_websocket_probe',
+      binanceOrderRules:binanceResult.base,
       bybit:bybitResult.base,
       okx:okxResult.base,
       gate:gateResult.base,
@@ -193,6 +224,8 @@ async function getCatalog() {
     },
     universeMode:'union_of_public_USDT_catalogs+live_books',
     maxMonitored:MAX_MONITORED_SYMBOLS,
+    orderRulesCoverage:orderRulesIndex.coverage,
+    orderRulesBinanceError:binanceResult.error,
     exchangeUniverse:{
       binanceActiveUsdt:null,
       bybitActiveUsdt:countVenue('bybit'),
@@ -212,6 +245,11 @@ async function getCatalog() {
     confirmed:candidates.length,
     pending:0,
   };
+  Object.defineProperty(catalog,'orderRulesBySymbol',{
+    value:orderRulesIndex.bySymbol,
+    enumerable:false,
+  });
+  return catalog;
 }
 
 async function ensureRuntime() {
@@ -239,6 +277,7 @@ async function ensureRuntime() {
         catalog,
         marketHub,
         bySymbol:new Map(catalog.candidates.map((x)=>[x.symbol,x])),
+        orderRulesBySymbol:catalog.orderRulesBySymbol,
         radarCache:new Map(),
         realityGate:createRealityGate(),
         dexRadarCache:new Map(),
@@ -401,6 +440,7 @@ function radarSnapshot(runtime,budgetUsdt=100) {
       return {
         asset,
         costs:costsForAsset(asset),
+        orderRulesByExchange:runtime.orderRulesBySymbol.get(route.symbol)||{},
       };
     },
   });
@@ -443,6 +483,7 @@ function radarSnapshot(runtime,budgetUsdt=100) {
     liquidResults:finite.length,
     positiveNet:allPositives.length,
     confirmedCount:confirmedTop5.length,
+    operationalCount:realityGate.operational,
     signalCount:signals.length,
     positiveByVenue:venueOpportunityCounts,
     newVenuePositiveCount:newVenuePositives.length,
@@ -457,7 +498,8 @@ function radarSnapshot(runtime,budgetUsdt=100) {
       label:'Saldo pré-posicionado',
       simultaneousExecutionAssumed:true,
       transferModeVerified:false,
-      orderRulesVerified:false,
+      operationalGateEnabled:true,
+      orderRulesRequiredForOperationalOk:true,
       fillGuaranteed:false,
     },
     safety:{
@@ -465,6 +507,7 @@ function radarSnapshot(runtime,budgetUsdt=100) {
       ordersEnabled:false,
       transferabilityVerified:false,
       depthConfirmationRequired:true,
+      operationalRulesGateRequired:true,
       persistenceConfirmations:realityGate.requiredStreak,
       anomalyGuardPct:DEFAULT_RULES.maxUnverifiedGrossSpreadPct,
       venueDeviationGuardPct:DEFAULT_RULES.maxVenueDeviationPct,
@@ -524,6 +567,7 @@ function marketDiagnostics(runtime,budgetUsdt=100) {
     finiteResults:radar.liquidResults,
     positiveNet:radar.positiveNet,
     confirmedCount:radar.confirmedCount,
+    operationalCount:radar.operationalCount,
     signalCount:radar.signalCount,
     realityGate:radar.realityGate,
     positiveByVenue:radar.positiveByVenue,
@@ -603,6 +647,13 @@ const server=http.createServer(async(req,res)=>{
           fillGuaranteed:false,
           transferModeVerified:false,
         },
+        operationalGate:{
+          enabled:true,
+          publicInstrumentRules:true,
+          validates:['minQty','qtyStep','minNotional','tickSize'],
+          orderModel:'marketable_limit_parameters',
+          fillGuaranteed:false,
+        },
         dexRadar:{
           enabled:true,
           mode:'same-chain-read-only',
@@ -666,6 +717,7 @@ const server=http.createServer(async(req,res)=>{
         sources:catalog.sources,
         exchanges:['binance','bybit','okx','gate','kucoin','bitget','htx'],
         feeModel:DEFAULT_COSTS,
+        orderRulesCoverage:catalog.orderRulesCoverage,
         monitoredCount:catalog.monitoredSymbols.length,
         candidateUsdt:catalog.exchangeUniverse.candidateUsdt,
       });
