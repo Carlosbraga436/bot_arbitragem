@@ -209,12 +209,21 @@ button{color:inherit}
 .realityStrip span.verified{
   color:var(--green-2);border-color:rgba(116,229,154,.34);background:rgba(31,83,50,.16);
 }
+.realityStrip span.operational{
+  color:#d8ffe5;border-color:rgba(116,229,154,.58);background:rgba(34,116,64,.24);
+  box-shadow:inset 0 0 0 1px rgba(116,229,154,.08);
+}
 .realityStrip span.checking{
   color:var(--amber);border-color:rgba(245,201,109,.28);background:rgba(90,70,20,.12);
 }
 .tradeHint.warningHint{border-color:rgba(245,201,109,.24)}
 .tradeHint.warningHint i{color:var(--amber)}
 .tradeHint.verifiedHint{border-color:rgba(116,229,154,.24)}
+.tradeHint.operationalHint{
+  border-color:rgba(116,229,154,.42);
+  background:linear-gradient(90deg,rgba(28,78,46,.18),rgba(11,20,27,.96));
+}
+.tradeHint.operationalHint i{color:var(--green)}
 
 .priceDisclosure{margin-top:10px;border-top:1px solid var(--line);padding-top:10px}
 .priceDisclosure summary{
