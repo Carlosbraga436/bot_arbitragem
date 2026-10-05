@@ -1,5 +1,6 @@
 import { fetchCexDepth } from './cex-depth.js';
 import { DEFAULT_RULES, evaluateRoute, exchangeFeePct } from './core.js';
+import { validateOperationalRoute } from './order-rules.js';
 
 export const REALITY_GATE_DEFAULTS = Object.freeze({
   depthLimit:100,
@@ -69,7 +70,7 @@ export function createRealityGate({
     return states.get(realityRouteKey(route,budgetUsdt))||null;
   }
 
-  async function check(route,{asset,budgetUsdt,costs}) {
+  async function check(route,{asset,budgetUsdt,costs,orderRulesByExchange={}}) {
     const key=realityRouteKey(route,budgetUsdt);
     if (inflight.has(key)) return inflight.get(key);
 
@@ -112,6 +113,23 @@ export function createRealityGate({
         }),costs);
 
         const positive=Boolean(evaluated?.eligible)&&Number(evaluated?.netPnlUsdt)>0;
+        const operational=positive
+          ? validateOperationalRoute({
+              route:evaluated,
+              buyBook,
+              sellBook,
+              buyRules:orderRulesByExchange?.[route.buyExchange]||null,
+              sellRules:orderRulesByExchange?.[route.sellExchange]||null,
+              costs,
+            })
+          : {
+              operationalOk:false,
+              orderRulesVerified:false,
+              reason:'route_not_depth_eligible',
+            };
+        const finalEvaluated=operational?.operationalOk
+          ? attachEconomics(operational.result,costs)
+          : evaluated;
         const previousSuccess=Number(current?.lastSuccessAt)||0;
         const persisted=previousSuccess>0 && evaluatedAt-previousSuccess<=cfg.persistenceGapMs;
         const streak=positive ? (persisted?(Number(current?.confirmationStreak)||0)+1:1) : 0;
@@ -151,10 +169,23 @@ export function createRealityGate({
           sellDepthLevels:Array.isArray(sellBook?.bids)?sellBook.bids.length:0,
           buyDepthSource:buyBook?.source||null,
           sellDepthSource:sellBook?.source||null,
-          orderRulesVerified:false,
+          orderRulesVerified:Boolean(operational?.orderRulesVerified),
+          operationalOk:Boolean(operational?.operationalOk),
+          operationalReason:operational?.reason||null,
+          operationalPlan:operational?.operationalOk ? {
+            executionOrderModel:operational.executionOrderModel,
+            baseQty:operational.baseQty,
+            commonQtyStep:operational.commonQtyStep,
+            buyLimitPrice:operational.buyLimitPrice,
+            sellLimitPrice:operational.sellLimitPrice,
+            buyNotionalUsdt:operational.buyNotionalUsdt,
+            sellNotionalUsdt:operational.sellNotionalUsdt,
+            buyRules:operational.buyRules,
+            sellRules:operational.sellRules,
+          } : null,
           executionMode:'prepositioned_inventory',
           transferabilityVerified:false,
-          result:evaluated,
+          result:finalEvaluated,
           error:null,
         };
         states.set(key,next);
@@ -230,14 +261,20 @@ export function createRealityGate({
         depthSkewMs:state.depthSkewMs,
         buyDepthLevels:state.buyDepthLevels,
         sellDepthLevels:state.sellDepthLevels,
-        orderRulesVerified:false,
+        orderRulesVerified:Boolean(state.orderRulesVerified),
+        operationalOk:Boolean(state.operationalOk),
+        operationalReason:state.operationalReason||null,
+        operationalPlan:state.operationalPlan||null,
         executionMode:'prepositioned_inventory',
         transferabilityVerified:false,
         realityCheckedAt:state.lastSuccessAt,
       });
     }
     return rows
-      .sort((a,b)=>(b.netPnlUsdt??-Infinity)-(a.netPnlUsdt??-Infinity))
+      .sort((a,b)=>
+        Number(Boolean(b.operationalOk))-Number(Boolean(a.operationalOk))
+        || (b.netPnlUsdt??-Infinity)-(a.netPnlUsdt??-Infinity)
+      )
       .slice(0,5);
   }
 
@@ -251,7 +288,9 @@ export function createRealityGate({
         confirmationStreak:Number(state?.confirmationStreak)||0,
         confirmationsRequired:cfg.requiredStreak,
         confidenceScore:Number(state?.confidenceScore)||0,
-        orderRulesVerified:false,
+        orderRulesVerified:Boolean(state?.orderRulesVerified),
+        operationalOk:Boolean(state?.operationalOk),
+        operationalReason:state?.operationalReason||null,
         executionMode:'prepositioned_inventory',
         transferabilityVerified:false,
         realityCheckedAt:state?.lastSuccessAt||null,
@@ -267,6 +306,8 @@ export function createRealityGate({
       checking:stateRows.filter((s)=>s.status==='checking').length,
       confirming:stateRows.filter((s)=>s.status==='confirming').length,
       confirmed:confirmed(candidates,budgetUsdt).length,
+      operational:stateRows.filter((s)=>s.confirmed&&s.operationalOk).length,
+      rulesVerified:stateRows.filter((s)=>s.orderRulesVerified).length,
       errors:stateRows.filter((s)=>s.status==='error').length,
       requiredStreak:cfg.requiredStreak,
       confirmationTtlMs:cfg.confirmationTtlMs,
