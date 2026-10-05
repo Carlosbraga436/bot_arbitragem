@@ -70,11 +70,24 @@ function priceDigits(value) {
   return 8;
 }
 
-function venuePriceMatrix(result) {
+function orderedVenueQuotes(result) {
   const quotes=Array.isArray(result?.venueQuotes)?result.venueQuotes:[];
+  if (!quotes.length) return [];
+  const chosen=[result?.buyExchange,result?.sellExchange].filter(Boolean);
+  return [...quotes].sort((a,b)=>{
+    const ai=chosen.indexOf(a.exchange);
+    const bi=chosen.indexOf(b.exchange);
+    const ar=ai===-1?99:ai;
+    const br=bi===-1?99:bi;
+    if (ar!==br) return ar-br;
+    return EXCHANGES.indexOf(a.exchange)-EXCHANGES.indexOf(b.exchange);
+  });
+}
+
+function venuePriceMatrix(result) {
+  const quotes=orderedVenueQuotes(result);
   if (!quotes.length) return '';
-  const byExchange=new Map(quotes.map((q)=>[q.exchange,q]));
-  const cards=EXCHANGES.map((exchange)=>byExchange.get(exchange)).filter(Boolean).map((q)=>{
+  const cards=quotes.map((q)=>{
     const buy=q.exchange===result?.buyExchange;
     const sell=q.exchange===result?.sellExchange;
     const stale=Number(q.ageMs)>5000;
@@ -89,34 +102,62 @@ function venuePriceMatrix(result) {
     </div>`;
   }).join('');
   return `<div class="priceMatrix">
-    <div class="priceMatrixTitle"><b>Preço da moeda em cada casa</b><small>Referência no centro · compra = ask · venda = bid</small></div>
+    <div class="priceMatrixTitle"><b>Preço da moeda em cada casa</b><small>Compra e venda da rota aparecem primeiro · referência = mid</small></div>
     <div class="priceRail">${cards}</div>
   </div>`;
 }
 
 function compactVenuePrices(result) {
-  const quotes=Array.isArray(result?.venueQuotes)?result.venueQuotes:[];
+  const quotes=orderedVenueQuotes(result);
   if (!quotes.length) return '';
-  return `<small class="venueCompact">${EXCHANGES.map((exchange)=>{
-    const q=quotes.find((x)=>x.exchange===exchange);
-    if (!q) return null;
+  const compact=quotes.slice(0,4);
+  return `<small class="venueCompact">${compact.map((q)=>{
     const mark=q.exchange===result?.buyExchange?'↓':(q.exchange===result?.sellExchange?'↑':'');
     return `<span>${mark}${exchangeLabel(q.exchange)} ${fmt(q.mid,priceDigits(q.mid))}</span>`;
-  }).filter(Boolean).join('')}</small>`;
+  }).join('')}</small>`;
 }
+
+function renderLiveTop5(data) {
+  const positives=Array.isArray(data?.top5)?data.top5:[];
+  const nearest=Array.isArray(data?.nearest5)?data.nearest5:[];
+  const shown=(positives.length?positives:nearest).slice(0,5);
+  const isPositive=positives.length>0;
+
+  $('liveTop5Title').textContent=isPositive?'TOP 5 AO VIVO':'5 MAIS PRÓXIMAS DO BREAKEVEN';
+  $('liveTop5Updated').textContent=
+    `${new Date().toLocaleTimeString('pt-BR')} · ${Number(data?.positiveNet||0)} elegíveis`;
+
+  $('liveTop5Rail').innerHTML=shown.length
+    ? shown.map((r,index)=>{
+        const eligible=Boolean(r?.eligible);
+        const net=Number(r?.netPnlUsdt);
+        const spread=Number(r?.grossSpreadPct);
+        const cap=Number(r?.executableBudgetUsdt||r?.budgetUsdt||0);
+        return `<div class="liveOpportunity" title="${r.symbol} · ${directionLabel(r)}">
+          <div class="liveRankLine"><span class="liveRank">#${index+1}</span><b class="liveSymbol">${r.symbol}</b></div>
+          <div class="liveRoute">${directionLabel(r)}</div>
+          <div class="livePnl ${eligible?'':'near'}">${Number.isFinite(net)?`${net>=0?'+':''}${fmt(net,2)}`:'—'}</div>
+          <div class="liveMeta">${spread>=0?'+':''}${fmt(spread,3)}% · até ${fmt(cap,0)} USDT</div>
+        </div>`;
+      }).join('')
+    : '<div class="liveEmpty">Nenhuma rota completa neste instante. O ranking continua atualizando automaticamente.</div>';
+}
+
 function renderRadar(data) {
   state.lastRadar=data;
   for (const exchange of EXCHANGES) applyStatus(exchange,data?.status?.[exchange]);
 
+  renderLiveTop5(data);
+
   $('identity').textContent=`${Number(data?.pairsWith2PlusVenues||0).toLocaleString('pt-BR')} comparáveis`;
   $('summary').textContent=
     `${Number(data?.monitored||0).toLocaleString('pt-BR')} sondados · `+
-    `${Number(data?.pairsWith2PlusVenues||0).toLocaleString('pt-BR')} com cotação em 2+ casas · `+
-    `${Number(data?.liquidResults||0).toLocaleString('pt-BR')} rotas avaliáveis com até ${state.budget.toLocaleString('pt-BR')} USDT · `+
+    `${Number(data?.pairsWith2PlusVenues||0).toLocaleString('pt-BR')} em 2+ casas · `+
+    `${Number(data?.liquidResults||0).toLocaleString('pt-BR')} rotas avaliáveis até ${state.budget.toLocaleString('pt-BR')} USDT · `+
     `${Number(data?.positiveNet||0)} elegíveis`+
     (Number(data?.newVenuePositiveCount||0)>0?` · ${Number(data.newVenuePositiveCount)} com Bitget/HTX`:'');
 
-  $('breakEven').textContent='O breakeven varia conforme a direção e as taxas aplicáveis ao par em cada exchange.';
+  $('breakEven').textContent='O breakeven varia conforme direção, par e taxa efetiva de cada exchange.';
 
   const positives=Array.isArray(data?.top5)?data.top5:[];
   const nearest=Array.isArray(data?.nearest5)?data.nearest5:[];
@@ -150,7 +191,7 @@ function renderRadar(data) {
         <span><small>${eligible?'Breakeven execução':'Falta p/ breakeven'}</small><b>${eligible?fmt(breakEven,3)+'%':fmt(gapPct,3)+' p.p.'}</b></span>
       </div>
       ${venuePriceMatrix(best)}
-      <p>Comprar em ${exchangeLabel(best.buyExchange)} @ ${fmt(best.buyVwap,8)} · vender em ${exchangeLabel(best.sellExchange)} @ ${fmt(best.sellVwap,8)} · ROI da execução ${fmt(best.roiOnTotalCapitalPct,3)}%. ${limited?`Com limite de ${fmt(requested,0)} USDT, o book atualmente visível comporta ${fmt(executable,2)} USDT nesta rota.`:'O valor máximo selecionado cabe integralmente no book visível.'} A recomposição é estimada separadamente.</p>`;
+      <p>Comprar em ${exchangeLabel(best.buyExchange)} @ ${fmt(best.buyVwap,8)} · vender em ${exchangeLabel(best.sellExchange)} @ ${fmt(best.sellVwap,8)} · ROI da execução ${fmt(best.roiOnTotalCapitalPct,3)}%. ${limited?`Com teto de ${fmt(requested,0)} USDT, o book visível comporta ${fmt(executable,2)} USDT nesta rota.`:'O teto selecionado cabe integralmente no book visível.'} A recomposição é exibida separadamente.</p>`;
   } else {
     $('bestLabel').textContent='MELHOR CANDIDATA AGORA';
     $('best').innerHTML='<h2>—</h2><p>Aguardando pares com cotação recente e liquidez suficiente em pelo menos duas exchanges.</p>';
@@ -168,11 +209,11 @@ function renderRadar(data) {
         const breakEven=Number(r?.breakEvenPct);
         const cls=eligible?'pos':'neg';
         return `<tr>
-          <td><b>${r.symbol}</b>${compactVenuePrices(r)}</td>
-          <td><b class="routeText">${directionLabel(r)}</b><small class="priceLine">Compra ${fmt(r.buyVwap,8)} · Venda ${fmt(r.sellVwap,8)}</small></td>
-          <td class="${eligible?'pos':''}">${grossPct>=0?'+':''}${fmt(grossPct,3)}%</td>
-          <td class="${cls}">${money(r.netPnlUsdt)}<small class="priceLine">Pós-rebalance ${money(r.netAfterRebalanceUsdt)}</small></td>
-          <td>${eligible
+          <td data-label="Par"><b>${r.symbol}</b>${compactVenuePrices(r)}</td>
+          <td data-label="Direção"><b class="routeText">${directionLabel(r)}</b><small class="priceLine">Compra ${fmt(r.buyVwap,8)} · Venda ${fmt(r.sellVwap,8)}</small></td>
+          <td data-label="Spread" class="${eligible?'pos':''}">${grossPct>=0?'+':''}${fmt(grossPct,3)}%</td>
+          <td data-label="Líquido" class="${cls}">${money(r.netPnlUsdt)}<small class="priceLine">Pós-rebalance ${money(r.netAfterRebalanceUsdt)}</small></td>
+          <td data-label="Status">${eligible
             ? (r.liquidityLimited
                 ? `elegível até ${fmt(r.executableBudgetUsdt||r.budgetUsdt,2)} USDT`
                 : `elegível até ${fmt(r.requestedBudgetUsdt||state.budget,0)} USDT`)
@@ -241,6 +282,7 @@ function renderDexRadar(data) {
       `<div class="funnelStep"><small>${label}</small><b>${Number(value||0).toLocaleString('pt-BR')}</b></div>${i<steps.length-1?'<span class="funnelArrow">→</span>':''}`
     ).join('')}</div><div class="funnelReasons">${reasonText||'Nenhum descarte relevante neste ciclo.'}${coverage?`<br><b>Cobertura:</b> ${coverage}`:''}</div>`;
   }
+
   $('dexTableTitle').textContent=positives.length
     ? 'Top DEX ↔ CEX confirmadas'
     : (nearest.length ? 'DEX ↔ CEX confirmadas mais próximas' : 'Pré-candidatas DEX ↔ CEX — aguardando quote');
@@ -266,7 +308,7 @@ function renderDexRadar(data) {
         <span><small>Gas estimado</small><b>${confirmed?money(-Number(best.gasUsd||0)):'—'}</b></span>
         <span><small>Liquidez pool</small><b>${Number(best.poolLiquidityUsd||0).toLocaleString('pt-BR',{style:'currency',currency:'USD',maximumFractionDigits:0})}</b></span>
       </div>
-      <p>Identidade DEX: chainId ${best.chainId} + contrato exato. Mapeamentos automáticos só entram após concordância do contrato entre lista oficial Uniswap e LI.FI; nenhum token arbitrário é aceito apenas pelo ticker. ${confirmed?`Quote: ${best.quoteSourceLabel||best.quoteSource||'confirmado'}. Screening: ${best.screeningStatus}. Order book da CEX confirmado em múltiplos níveis.`:'Quote executável ainda não confirmado — não usar esta linha para executar.'} ${best.knownNetworkRestriction?'Uma das pernas necessárias ao rebalanceamento token/USDT está publicamente restrita ou divergente e a rota foi bloqueada.':(best.transferabilityVerified?'As duas pernas direcionais do rebalanceamento foram verificadas publicamente na mesma rede e com contratos compatíveis.':'Quando a CEX não expõe todos os dados públicos de token e USDT, o radar mantém o rebalanceamento como não verificado, sem fingir garantia.')} A execução continua em modo read-only.</p>`;
+      <p>Identidade DEX: chainId ${best.chainId} + contrato exato. Mapeamentos automáticos só entram após concordância do contrato entre lista oficial Uniswap e LI.FI; ticker isolado nunca basta. ${confirmed?`Quote: ${best.quoteSourceLabel||best.quoteSource||'confirmado'}. Screening: ${best.screeningStatus}. Order book da CEX confirmado em múltiplos níveis.`:'Quote executável ainda não confirmado — não usar esta linha para executar.'} ${best.knownNetworkRestriction?'Uma perna necessária ao rebalanceamento token/USDT está publicamente restrita ou divergente e a rota foi bloqueada.':(best.transferabilityVerified?'As duas pernas direcionais do rebalanceamento foram verificadas publicamente na mesma rede e com contratos compatíveis.':'Quando a CEX não expõe todos os dados públicos de token e USDT, o radar mantém o rebalanceamento como não verificado.')} A execução continua read-only.</p>`;
   } else {
     $('dexBest').innerHTML='<h2>—</h2><p>Nenhuma rota DEX ↔ CEX detectada neste ciclo. O radar só aceita contrato exato; ticker sozinho nunca é usado como identidade.</p>';
   }
@@ -276,11 +318,11 @@ function renderDexRadar(data) {
         const confirmed=r.confirmedExecutable !== false && Number.isFinite(Number(r.netPnlUsdt));
         const spread=confirmed ? Number(r.grossSpreadPct) : Number(r.preliminarySpreadPct);
         return `<tr>
-        <td><b>${r.asset}</b><small class="priceLine">${r.chain} · ${shortAddress(r.contract)}</small></td>
-        <td><b class="routeText">${dexVenueLabel(r.buyVenue)} → ${dexVenueLabel(r.sellVenue)}</b><small class="priceLine">DEX: ${r.dex}</small></td>
-        <td class="${r.eligible?'pos':''}">${spread>=0?'+':''}${fmt(spread,3)}%</td>
-        <td class="${r.eligible?'pos':'neg'}">${confirmed?money(r.netPnlUsdt):'aguardando quote'}</td>
-        <td>${r.sameAssetVerified
+        <td data-label="Ativo"><b>${r.asset}</b><small class="priceLine">${r.chain} · ${shortAddress(r.contract)}</small></td>
+        <td data-label="Direção"><b class="routeText">${dexVenueLabel(r.buyVenue)} → ${dexVenueLabel(r.sellVenue)}</b><small class="priceLine">DEX: ${r.dex}</small></td>
+        <td data-label="Spread" class="${r.eligible?'pos':''}">${spread>=0?'+':''}${fmt(spread,3)}%</td>
+        <td data-label="Líquido" class="${r.eligible?'pos':'neg'}">${confirmed?money(r.netPnlUsdt):'aguardando quote'}</td>
+        <td data-label="Validação">${r.sameAssetVerified
           ? (confirmed
               ? `DEX contrato ✓ · token CEX ${r.cexContractVerified===true?'✓':(r.cexContractVerified===false?'≠':'?')} · USDT CEX ${r.quoteContractVerified===true?'✓':(r.quoteContractVerified===false?'≠':'?')} · depth ${r.depthConfirmed?'✓':'—'} · ${r.rebalanceStatus==='verified_open'?'rebalance 2/2 ✓':(r.rebalanceStatus==='restricted'?'rebalance restrito':'rebalance ?')}`
               : 'DEX contrato ✓ · CEX ainda não confirmada')
@@ -332,6 +374,7 @@ async function bootstrap() {
     touch(exchange,null);
   }
   $('summary').textContent='Inicializando radar multiexchange…';
+  $('liveTop5Updated').textContent='sincronizando…';
   await startPolling();
 }
 
@@ -355,6 +398,9 @@ $('reconnect').addEventListener('click',async()=>{
 function showFatal(error) {
   stopPolling();
   $('summary').textContent=`Falha segura: ${error.message}`;
+  $('liveTop5Title').textContent='RADAR TEMPORARIAMENTE INDISPONÍVEL';
+  $('liveTop5Updated').textContent='sem atualização';
+  $('liveTop5Rail').innerHTML='<div class="liveEmpty">A conexão falhou com segurança. Use Reconectar para tentar novamente.</div>';
   for (const exchange of EXCHANGES) setStatus(exchange,'bad','Indisponível');
 }
 
