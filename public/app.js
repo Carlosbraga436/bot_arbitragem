@@ -106,6 +106,7 @@ function rankingFor(data){
 }
 
 function realityLabel(route){
+  if(route?.operationalOk) return 'OPERACIONAL OK';
   if(route?.realityStatus==='confirmed') return `DEPTH OK · ${Number(route?.confidenceScore||0)}/100`;
   const streak=Number(route?.confirmationStreak||0);
   const required=Number(route?.confirmationsRequired||3);
@@ -113,6 +114,26 @@ function realityLabel(route){
   if(route?.realityStatus==='error') return 'FALHA NA CONFIRMAÇÃO';
   if(route?.realityStatus==='rejected') return 'DEPTH REJEITOU';
   return `CONFIRMANDO ${streak}/${required}`;
+}
+
+function operationalReasonLabel(route){
+  const reason=route?.operationalReason;
+  return ({
+    instrument_rules_unverified:'regras públicas do par incompletas',
+    quantity_step_unverified:'step size não verificável',
+    quantity_rounds_to_zero:'quantidade fica abaixo do lote permitido',
+    buy_quantity_rule_failed:'quantidade inválida na compra',
+    sell_quantity_rule_failed:'quantidade inválida na venda',
+    buy_min_notional_failed:'valor mínimo não atingido na compra',
+    sell_min_notional_failed:'valor mínimo não atingido na venda',
+    buy_max_notional_failed:'valor acima do máximo na compra',
+    sell_max_notional_failed:'valor acima do máximo na venda',
+    depth_insufficient_after_rounding:'depth insuficiente após ajustar o lote',
+    price_tick_unverified:'tick size não verificável',
+    buy_price_rule_failed:'preço inválido na compra',
+    sell_price_rule_failed:'preço inválido na venda',
+    non_positive_after_order_rounding:'lucro desapareceu após ajustar lote/preço',
+  }[reason]||'aguardando validação das regras de ordem');
 }
 
 function renderExchangeHealth(data){
@@ -130,7 +151,7 @@ function renderExchangeHealth(data){
 function renderTop5(data){
   const {rows,isPositive}=rankingFor(data);
   $('top5Title').textContent='TOP 5 AGORA';
-  $('top5Updated').textContent=`${new Date().toLocaleTimeString('pt-BR')} · ${Number(data?.confirmedCount||0)} confirmadas · ${Number(data?.positiveNet||0)} sinais +`;
+  $('top5Updated').textContent=`${new Date().toLocaleTimeString('pt-BR')} · ${Number(data?.operationalCount||0)} operacionais · ${Number(data?.confirmedCount||0)} depth`;
 
   if(rows.length && !rows.some((r)=>routeKey(r)===state.selectedRouteKey)){
     state.selectedRouteKey=routeKey(rows[0]);
@@ -139,11 +160,13 @@ function renderTop5(data){
   $('top5List').innerHTML=rows.length
     ? rows.map((r,index)=>{
         const eligible=Boolean(r?.eligible);
+        const operational=Boolean(r?.operationalOk);
+        const depthOk=r?.realityStatus==='confirmed';
         const selected=routeKey(r)===state.selectedRouteKey;
         const executable=Number(r?.executableBudgetUsdt||r?.budgetUsdt||0);
         const spread=Number(r?.grossSpreadPct);
         const pnl=Number(r?.netPnlUsdt);
-        return `<button type="button" class="opRow ${selected?'selected':''} ${eligible?'':'near'}" data-route-key="${routeKey(r)}">
+        return `<button type="button" class="opRow ${selected?'selected':''} ${operational?'operational':(depthOk?'depthOnly':'signal')} ${eligible?'':'near'}" data-route-key="${routeKey(r)}">
           <span class="rank">#${index+1}</span>
           <span class="opSymbol">${r.symbol||'—'}</span>
           <span class="opRoute">
@@ -215,6 +238,7 @@ function renderFocusedOpportunity(data){
   }
 
   const confirmed=selected?.realityStatus==='confirmed';
+  const operational=Boolean(selected?.operationalOk);
   const eligible=Boolean(selected?.eligible);
   const pnl=Number(selected?.netPnlUsdt);
   const spread=Number(selected?.grossSpreadPct);
@@ -229,11 +253,11 @@ function renderFocusedOpportunity(data){
   $('focusCard').innerHTML=`
     <div class="focusHero">
       <div class="focusPair">
-        <span>${confirmed?'DEPTH VALIDADO':(mode==='signals'?'SINAL EM CONFIRMAÇÃO':'CANDIDATA MAIS PRÓXIMA')}</span>
+        <span>${operational?'OPERACIONAL OK':(confirmed?'DEPTH VALIDADO':(mode==='signals'?'SINAL EM CONFIRMAÇÃO':'CANDIDATA MAIS PRÓXIMA'))}</span>
         <h1>${selected.symbol}</h1>
       </div>
       <div class="focusPnl">
-        <small>${confirmed?'líquido confirmado':'líquido indicativo'}</small>
+        <small>${operational?'líquido operacional':(confirmed?'líquido depth':'líquido indicativo')}</small>
         <strong class="${confirmed?'':'near'}">${money(pnl)}</strong>
       </div>
     </div>
@@ -276,17 +300,23 @@ function renderFocusedOpportunity(data){
     </div>
 
     <div class="realityStrip">
-      <span class="${confirmed?'verified':'checking'}">${realityLabel(selected)}</span>
+      <span class="${operational?'operational':(confirmed?'verified':'checking')}">${realityLabel(selected)}</span>
       <span>Depth ${Number(selected?.buyDepthLevels||0)}×${Number(selected?.sellDepthLevels||0)}</span>
+      <span>${selected?.orderRulesVerified?'Regras de ordem ✓':'Regras de ordem —'}</span>
+      ${operational&&selected?.operationalPlan?.baseQty
+        ? `<span>Qtd ${fmt(selected.operationalPlan.baseQty,8)}</span>`
+        : ''}
       <span>Saldo pré-posicionado</span>
       <span>Fill não garantido</span>
     </div>
 
-    <div class="tradeHint ${confirmed?'verifiedHint':'warningHint'}">
+    <div class="tradeHint ${operational?'operationalHint':(confirmed?'verifiedHint':'warningHint')}">
       <i>●</i>
-      <span>${confirmed
-        ? `Depth multi-level reconfirmado ${Number(selected?.confirmationStreak||0)}/${Number(selected?.confirmationsRequired||3)}. Comprar em <b>${exchangeLabel(selected.buyExchange)}</b> e vender em <b>${exchangeLabel(selected.sellExchange)}</b>. Pós-recomposição estimado: <b>${money(afterRebalance)}</b>. A oportunidade pode mudar antes do fill.`
-        : `Este é apenas um sinal do broad scan. O Reality Gate ainda não terminou a confirmação de depth/persistência. <b>Não executar como confirmado.</b>`}</span>
+      <span>${operational
+        ? `Depth ${Number(selected?.confirmationStreak||0)}/${Number(selected?.confirmationsRequired||3)} e regras públicas do par validadas. Quantidade normalizada: <b>${fmt(selected?.operationalPlan?.baseQty,8)}</b>. Parâmetros de limite: compra até <b>${fmt(selected?.operationalPlan?.buyLimitPrice,priceDigits(selected?.operationalPlan?.buyLimitPrice))}</b> e venda a partir de <b>${fmt(selected?.operationalPlan?.sellLimitPrice,priceDigits(selected?.operationalPlan?.sellLimitPrice))}</b>. Pós-recomposição estimado: <b>${money(afterRebalance)}</b>. Fill continua não garantido.`
+        : confirmed
+          ? `Depth multi-level reconfirmado ${Number(selected?.confirmationStreak||0)}/${Number(selected?.confirmationsRequired||3)}, mas ainda não é OPERACIONAL OK: <b>${operationalReasonLabel(selected)}</b>.`
+          : `Este é apenas um sinal do broad scan. O Reality Gate ainda não terminou a confirmação de depth/persistência. <b>Não executar como confirmado.</b>`}</span>
     </div>
 
     <details class="priceDisclosure">
@@ -316,7 +346,8 @@ function renderRadar(data){
   $('radarSummary').textContent=
     `${Number(data?.monitored||0).toLocaleString('pt-BR')} monitorados · `+
     `${Number(data?.liquidResults||0).toLocaleString('pt-BR')} avaliáveis · `+
-    `${Number(data?.confirmedCount||0)} confirmadas · `+
+    `${Number(data?.operationalCount||0)} operacionais · `+
+    `${Number(data?.confirmedCount||0)} depth · `+
     `${Number(data?.positiveNet||0)} sinais positivos`;
 
   renderTop5(data);
