@@ -134,6 +134,7 @@ export function createRealityGate({
         const persisted=previousSuccess>0 && evaluatedAt-previousSuccess<=cfg.persistenceGapMs;
         const streak=positive ? (persisted?(Number(current?.confirmationStreak)||0)+1:1) : 0;
         const confirmed=positive && streak>=cfg.requiredStreak;
+        const operationalReady=confirmed && Boolean(operational?.operationalOk);
         const depthAgeMs=Math.max(
           Math.max(0,evaluatedAt-Number(buyBook?.ts||evaluatedAt)),
           Math.max(0,evaluatedAt-Number(sellBook?.ts||evaluatedAt)),
@@ -170,8 +171,10 @@ export function createRealityGate({
           buyDepthSource:buyBook?.source||null,
           sellDepthSource:sellBook?.source||null,
           orderRulesVerified:Boolean(operational?.orderRulesVerified),
-          operationalOk:Boolean(operational?.operationalOk),
-          operationalReason:operational?.reason||null,
+          operationalOk:operationalReady,
+          operationalReason:operationalReady
+            ? 'operational_ok'
+            : (operational?.operationalOk ? 'awaiting_persistence' : (operational?.reason||null)),
           operationalPlan:operational?.operationalOk ? {
             executionOrderModel:operational.executionOrderModel,
             baseQty:operational.baseQty,
