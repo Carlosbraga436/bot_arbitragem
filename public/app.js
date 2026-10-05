@@ -89,7 +89,9 @@ function rankingFor(data){
   const confirmed=Array.isArray(data?.top5)?data.top5:[];
   const signals=Array.isArray(data?.signals)?data.signals:[];
   const nearest=Array.isArray(data?.nearest5)?data.nearest5:[];
-  const rows=confirmed.length?confirmed:(signals.length?signals:nearest);
+  const confirmedKeys=new Set(confirmed.map((r)=>routeKey(r)));
+  const mixed=[...confirmed,...signals.filter((r)=>!confirmedKeys.has(routeKey(r)))];
+  const rows=mixed.length?mixed:nearest;
   return {
     positives:confirmed,
     signals,
@@ -101,7 +103,7 @@ function rankingFor(data){
 }
 
 function realityLabel(route){
-  if(route?.realityStatus==='confirmed') return `CONFIRMADA · ${Number(route?.confidenceScore||0)}%`;
+  if(route?.realityStatus==='confirmed') return `DEPTH OK · ${Number(route?.confidenceScore||0)}/100`;
   const streak=Number(route?.confirmationStreak||0);
   const required=Number(route?.confirmationsRequired||3);
   if(route?.realityStatus==='checking') return 'CHECANDO DEPTH';
@@ -124,7 +126,7 @@ function renderExchangeHealth(data){
 
 function renderTop5(data){
   const {rows,isPositive}=rankingFor(data);
-  $('top5Title').textContent=isPositive?'TOP 5 CONFIRMADAS':(Array.isArray(data?.signals)&&data.signals.length?'SINAIS EM CONFIRMAÇÃO':'5 MAIS PRÓXIMAS');
+  $('top5Title').textContent='TOP 5 AGORA';
   $('top5Updated').textContent=`${new Date().toLocaleTimeString('pt-BR')} · ${Number(data?.confirmedCount||0)} confirmadas · ${Number(data?.positiveNet||0)} sinais +`;
 
   if(rows.length && !rows.some((r)=>routeKey(r)===state.selectedRouteKey)){
@@ -224,7 +226,7 @@ function renderFocusedOpportunity(data){
   $('focusCard').innerHTML=`
     <div class="focusHero">
       <div class="focusPair">
-        <span>${confirmed?'OPORTUNIDADE CONFIRMADA':(mode==='signals'?'SINAL EM CONFIRMAÇÃO':'CANDIDATA MAIS PRÓXIMA')}</span>
+        <span>${confirmed?'DEPTH VALIDADO':(mode==='signals'?'SINAL EM CONFIRMAÇÃO':'CANDIDATA MAIS PRÓXIMA')}</span>
         <h1>${selected.symbol}</h1>
       </div>
       <div class="focusPnl">
