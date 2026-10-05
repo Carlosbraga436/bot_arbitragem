@@ -133,7 +133,7 @@ button{color:inherit}
 .opProfit{text-align:right}
 .opProfit b{display:block;color:var(--green);font-size:11px;font-variant-numeric:tabular-nums}
 .opProfit small{display:block;color:var(--muted);font-size:8px;margin-top:2px}
-.opRow.near .opProfit b{color:var(--amber)}
+.opRow.near .opProfit b{color:var(--amber)}\n.near{color:var(--amber)!important}\n.good{color:var(--green)!important}
 .emptyState{padding:16px 12px;color:var(--muted);font-size:11px}
 
 .focusSection{margin:0 0 12px}
