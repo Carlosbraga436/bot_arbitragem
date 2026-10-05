@@ -199,6 +199,23 @@ button{color:inherit}
   background:#0b141b;border:1px solid var(--line);color:#c9d6df;font-size:9px;line-height:1.4;
 }
 .tradeHint i{font-style:normal;color:var(--green);font-size:14px}
+.realityStrip{
+  display:flex;flex-wrap:wrap;gap:6px;margin-top:11px;
+}
+.realityStrip span{
+  padding:5px 7px;border-radius:999px;border:1px solid var(--line);
+  background:#081117;color:var(--muted);font-size:7px;font-weight:800;letter-spacing:.03em;
+}
+.realityStrip span.verified{
+  color:var(--green-2);border-color:rgba(116,229,154,.34);background:rgba(31,83,50,.16);
+}
+.realityStrip span.checking{
+  color:var(--amber);border-color:rgba(245,201,109,.28);background:rgba(90,70,20,.12);
+}
+.tradeHint.warningHint{border-color:rgba(245,201,109,.24)}
+.tradeHint.warningHint i{color:var(--amber)}
+.tradeHint.verifiedHint{border-color:rgba(116,229,154,.24)}
+
 .priceDisclosure{margin-top:10px;border-top:1px solid var(--line);padding-top:10px}
 .priceDisclosure summary{
   list-style:none;cursor:pointer;color:#cbd7df;font-size:10px;font-weight:800;
