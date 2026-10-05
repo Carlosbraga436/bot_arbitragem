@@ -8,7 +8,7 @@ export const REALITY_GATE_DEFAULTS = Object.freeze({
   persistenceGapMs:5_000,
   minCheckIntervalMs:1_600,
   maxCandidates:7,
-  maxConcurrent:4,
+  maxConcurrent:7,
 });
 
 export function realityRouteKey(route, budgetUsdt) {
@@ -114,7 +114,7 @@ export function createRealityGate({
         const positive=Boolean(evaluated?.eligible)&&Number(evaluated?.netPnlUsdt)>0;
         const previousSuccess=Number(current?.lastSuccessAt)||0;
         const persisted=previousSuccess>0 && evaluatedAt-previousSuccess<=cfg.persistenceGapMs;
-        const streak=positive ? (persisted?(Number(current?.streak)||0)+1:1) : 0;
+        const streak=positive ? (persisted?(Number(current?.confirmationStreak)||0)+1:1) : 0;
         const confirmed=positive && streak>=cfg.requiredStreak;
         const depthAgeMs=Math.max(
           Math.max(0,evaluatedAt-Number(buyBook?.ts||evaluatedAt)),
