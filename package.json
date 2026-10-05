@@ -1,9 +1,9 @@
 {
   "name": "radar-cripto-carlos",
-  "version": "0.25.0-recovery.1",
+  "version": "0.26.0-recovery.1",
   "private": true,
   "type": "module",
-  "description": "Radar Cripto com 7 CEXs + DEX same-chain em 5 redes, Top 5 ao vivo persistente, mapa de preços por corretora, multi-pool, depth e custos conservadores. Somente leitura/simulação.",
+  "description": "Radar Cripto mobile-first com 7 CEXs + DEX same-chain, Opportunity Board Top 5 persistente, ticket de execução, mapa de preços, depth e custos conservadores. Somente leitura/simulação.",
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
