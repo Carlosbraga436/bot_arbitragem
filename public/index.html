@@ -3,121 +3,133 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <meta name="theme-color" content="#071018" />
-  <title>Entre • Radar Cripto</title>
+  <meta name="theme-color" content="#060b10" />
+  <title>Radar Cripto</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <main class="shell">
-    <header class="appHeader">
-      <div class="brand">
-        <span class="eyebrow">ENTRE · RADAR CRIPTO</span>
-        <h1>Arbitragem em tempo real</h1>
-        <p>7 CEXs + DEXs selecionadas · spot USDT · somente leitura e simulação</p>
+  <main class="appShell">
+    <header class="topbar">
+      <div class="brandBlock">
+        <div class="brandMark">R</div>
+        <div>
+          <span class="brandKicker">RADAR CRIPTO</span>
+          <strong>Arbitragem ao vivo</strong>
+        </div>
       </div>
-      <button id="reconnect" class="reconnectBtn" type="button">Reconectar <span aria-hidden="true">↻</span></button>
+
+      <div class="topActions">
+        <span id="systemHealth" class="healthPill pending"><i></i><span>conectando</span></span>
+        <button id="reconnect" class="iconButton" type="button" aria-label="Reconectar">↻</button>
+      </div>
     </header>
 
-    <section class="card controlBar">
-      <div class="budgetBlock">
-        <small>Capital máximo por compra</small>
+    <section class="controlStrip" aria-label="Capital máximo">
+      <div class="budgetCopy">
+        <small>CAPITAL MÁXIMO</small>
         <strong><span id="budgetLabel">100</span> USDT</strong>
       </div>
-      <div class="pills" aria-label="Capital máximo">
-        <button data-budget="100" class="active" type="button">100</button>
-        <button data-budget="500" type="button">500</button>
-        <button data-budget="1000" type="button">1.000</button>
+      <div class="budgetTabs">
+        <button type="button" data-budget="100" class="active">100</button>
+        <button type="button" data-budget="500">500</button>
+        <button type="button" data-budget="1000">1.000</button>
       </div>
-      <div class="capitalHint">Capital nas duas pontas ≈ <b><span id="capital">200</span> USDT</b> + custos</div>
     </section>
 
-    <section class="exchangeStrip" aria-label="Status das corretoras">
-      <article class="exchangeStatusCard"><div class="statusRow"><b>Binance</b><span id="binanceStatus" class="dot pending">Conectando</span></div><small id="binanceLast">Última cotação: —</small></article>
-      <article class="exchangeStatusCard"><div class="statusRow"><b>Bybit</b><span id="bybitStatus" class="dot pending">Conectando</span></div><small id="bybitLast">Última cotação: —</small></article>
-      <article class="exchangeStatusCard"><div class="statusRow"><b>OKX</b><span id="okxStatus" class="dot pending">Conectando</span></div><small id="okxLast">Última cotação: —</small></article>
-      <article class="exchangeStatusCard"><div class="statusRow"><b>Gate.io</b><span id="gateStatus" class="dot pending">Conectando</span></div><small id="gateLast">Última cotação: —</small></article>
-      <article class="exchangeStatusCard"><div class="statusRow"><b>KuCoin</b><span id="kucoinStatus" class="dot pending">Conectando</span></div><small id="kucoinLast">Última cotação: —</small></article>
-      <article class="exchangeStatusCard"><div class="statusRow"><b>Bitget</b><span id="bitgetStatus" class="dot pending">Conectando</span></div><small id="bitgetLast">Última cotação: —</small></article>
-      <article class="exchangeStatusCard"><div class="statusRow"><b>HTX</b><span id="htxStatus" class="dot pending">Conectando</span></div><small id="htxLast">Última cotação: —</small></article>
-    </section>
-
-    <section id="liveTop5Dock" class="liveTop5Dock" aria-live="polite">
-      <div class="liveTop5Head">
+    <section id="top5Board" class="top5Board" aria-live="polite">
+      <div class="boardHead">
         <div>
-          <span class="livePulse" aria-hidden="true"></span>
-          <b id="liveTop5Title">TOP 5 AO VIVO</b>
+          <span class="liveDot"></span>
+          <strong id="top5Title">TOP 5 AGORA</strong>
         </div>
-        <small id="liveTop5Updated">aguardando dados</small>
+        <small id="top5Updated">sincronizando…</small>
       </div>
-      <div id="liveTop5Rail" class="liveTop5Rail">
-        <div class="liveEmpty">Montando ranking executável…</div>
+      <div id="top5List" class="top5List">
+        <div class="emptyState">Buscando oportunidades executáveis…</div>
       </div>
     </section>
 
-    <section id="bestSection" class="card hero heroPrimary">
-      <div class="heroTopline">
-        <span class="eyebrow" id="bestLabel">MELHOR CANDIDATA AGORA</span>
-        <span class="badge" id="identity">0 comparáveis</span>
+    <section class="focusSection">
+      <div class="sectionLabel">
+        <span>OPORTUNIDADE SELECIONADA</span>
+        <small id="comparables">0 pares comparáveis</small>
       </div>
-      <div id="best"><h2>—</h2><p>Aguardando dados recentes nas corretoras.</p></div>
-    </section>
-
-    <section id="top5Detail" class="card">
-      <div class="sectionHead">
-        <div>
-          <h2 id="tableTitle">Top 5 oportunidades elegíveis</h2>
-          <p id="summary">Descobrindo pares comuns…</p>
+      <article id="focusCard" class="focusCard">
+        <div class="focusLoading">
+          <strong>Carregando radar…</strong>
+          <span>A melhor rota aparecerá aqui.</span>
         </div>
+      </article>
+    </section>
+
+    <details class="secondaryPanel">
+      <summary>
+        <span>
+          <b>Corretoras e conexão</b>
+          <small id="exchangeSummary">7 fontes monitoradas</small>
+        </span>
+        <em>ver status</em>
+      </summary>
+      <div class="exchangeGrid">
+        <article><div><b>Binance</b><span id="binanceStatus" class="dot pending">Conectando</span></div><small id="binanceLast">Última cotação: —</small></article>
+        <article><div><b>Bybit</b><span id="bybitStatus" class="dot pending">Conectando</span></div><small id="bybitLast">Última cotação: —</small></article>
+        <article><div><b>OKX</b><span id="okxStatus" class="dot pending">Conectando</span></div><small id="okxLast">Última cotação: —</small></article>
+        <article><div><b>Gate.io</b><span id="gateStatus" class="dot pending">Conectando</span></div><small id="gateLast">Última cotação: —</small></article>
+        <article><div><b>KuCoin</b><span id="kucoinStatus" class="dot pending">Conectando</span></div><small id="kucoinLast">Última cotação: —</small></article>
+        <article><div><b>Bitget</b><span id="bitgetStatus" class="dot pending">Conectando</span></div><small id="bitgetLast">Última cotação: —</small></article>
+        <article><div><b>HTX</b><span id="htxStatus" class="dot pending">Conectando</span></div><small id="htxLast">Última cotação: —</small></article>
       </div>
+    </details>
 
-      <details class="modelDetails">
-        <summary>Como o lucro e os preços são calculados</summary>
-        <div class="costs">Taxas taker modeladas: Binance 0,10% · Bybit 0,10% · OKX spot USDT 0,10% · Gate.io 0,10% · KuCoin conforme classe do par (fallback conservador 0,30%) · Bitget 0,10% · HTX fallback conservador 0,20% · reserva 0,05% por ponta. Em cada oportunidade, o painel mostra o preço da moeda nas casas com dados recentes: referência = mid, Compra = ask executável e Venda = bid executável. A oportunidade entra no Top 5 pelo líquido da execução. <span id="breakEven"></span></div>
-      </details>
-
-      <div class="tableWrap">
-        <table class="opportunityTable">
-          <thead><tr><th>Par</th><th>Direção</th><th>Spread</th><th>Líquido</th><th>Status</th></tr></thead>
-          <tbody id="rows"><tr><td colspan="5">Aguardando…</td></tr></tbody>
-        </table>
+    <details class="secondaryPanel">
+      <summary>
+        <span>
+          <b>Auditoria do Top 5</b>
+          <small id="radarSummary">Aguardando dados…</small>
+        </span>
+        <em>ver detalhes</em>
+      </summary>
+      <div class="auditBody">
+        <div id="top5Audit" class="auditList"></div>
+        <p class="auditNote">O ranking usa ask para compra, bid para venda, liquidez visível, taxas, reserva e os mesmos guards do servidor. O valor escolhido é um teto de capital, não uma obrigação de usar tudo.</p>
       </div>
-    </section>
+    </details>
 
-    <section class="sectionDivider">
-      <span>DEX ↔ CEX</span>
-      <small>beta same-chain</small>
-    </section>
+    <details id="dexModule" class="secondaryPanel dexPanel">
+      <summary>
+        <span>
+          <b>DEX ↔ CEX</b>
+          <small id="dexSummary">Beta same-chain · validação por contrato</small>
+        </span>
+        <em>abrir radar DEX</em>
+      </summary>
 
-    <section class="card hero">
-      <span class="eyebrow">MELHOR ROTA DEX ↔ CEX</span>
-      <div id="dexBest"><h2>—</h2><p>Inicializando contratos e pools curados…</p></div>
-    </section>
+      <div class="dexBody">
+        <article id="dexBest" class="dexBest">
+          <div class="focusLoading">
+            <strong>Inicializando DEX…</strong>
+            <span>Validando contratos, pools e quotes.</span>
+          </div>
+        </article>
 
-    <section class="card">
-      <div class="sectionHead">
-        <div>
-          <h2 id="dexTableTitle">DEX ↔ CEX</h2>
-          <p id="dexSummary">Validando contratos exatos…</p>
+        <div id="dexFunnel" class="funnel">
+          <div class="funnelReasons">Montando funil de confirmação…</div>
         </div>
-        <div class="badge">CONTRATO + CHAIN ✓</div>
+
+        <div id="dexList" class="dexList"></div>
+
+        <details class="rulesDisclosure">
+          <summary>Como validamos DEX ↔ CEX</summary>
+          <p>Ethereum, Arbitrum, Base, Polygon e BNB Chain, com liquidação em USDT da própria rede. Identidade automática exige contrato exato, chainId e concordância entre fontes. Pools fracos, quotes não confirmados, profundidade insuficiente e rebalanceamentos restritos ficam fora das rotas elegíveis.</p>
+        </details>
       </div>
+    </details>
 
-      <details class="modelDetails">
-        <summary>Regras de segurança DEX</summary>
-        <div class="costs">Ethereum, Arbitrum, Base, Polygon e BNB Chain, sempre com liquidação modelada em USDT da própria rede. A expansão automática só aceita contrato com concordância exata entre a lista oficial Uniswap e LI.FI, além de mapeamento CEX explícito. Cada ativo pode varrer até 3 pools curados; pools abaixo de US$ 250 mil ou com menos de US$ 10 mil de volume em 24h ficam fora. Quote direto read-only: Uniswap em Ethereum/Arbitrum/Base/Polygon/BNB, SushiSwap onde suportado, Camelot em Arbitrum, QuickSwap em Polygon e PancakeSwap em BNB; LI.FI permanece fallback. Depois do quote, ainda exigimos depth CEX, custos, gas da moeda nativa e rebalanceamento token + USDT.</div>
-      </details>
-
-      <div id="dexFunnel" class="funnel"><div class="funnelReasons">Montando funil de confirmação…</div></div>
-      <div class="tableWrap">
-        <table class="opportunityTable">
-          <thead><tr><th>Ativo</th><th>Direção</th><th>Spread</th><th>Líquido</th><th>Validação</th></tr></thead>
-          <tbody id="dexRows"><tr><td colspan="5">Aguardando…</td></tr></tbody>
-        </table>
-      </div>
-    </section>
-
-    <footer>Sem depósito · sem API key · sem envio de ordens · O valor selecionado é um teto, não uma obrigação de usar tudo. O Top 5 é reordenado automaticamente conforme dados e liquidez mudam.</footer>
+    <footer>
+      Somente leitura · sem envio de ordens · sem depósito automático · ranking em tempo real
+    </footer>
   </main>
+
   <script type="module" src="/app.js"></script>
 </body>
 </html>
