@@ -86,14 +86,28 @@ function priceDigits(value){
 }
 
 function rankingFor(data){
-  const positives=Array.isArray(data?.top5)?data.top5:[];
+  const confirmed=Array.isArray(data?.top5)?data.top5:[];
+  const signals=Array.isArray(data?.signals)?data.signals:[];
   const nearest=Array.isArray(data?.nearest5)?data.nearest5:[];
+  const rows=confirmed.length?confirmed:(signals.length?signals:nearest);
   return {
-    positives,
+    positives:confirmed,
+    signals,
     nearest,
-    rows:(positives.length?positives:nearest).slice(0,5),
-    isPositive:positives.length>0,
+    rows:rows.slice(0,5),
+    isPositive:confirmed.length>0,
+    mode:confirmed.length?'confirmed':(signals.length?'signals':'nearest'),
   };
+}
+
+function realityLabel(route){
+  if(route?.realityStatus==='confirmed') return `CONFIRMADA · ${Number(route?.confidenceScore||0)}%`;
+  const streak=Number(route?.confirmationStreak||0);
+  const required=Number(route?.confirmationsRequired||3);
+  if(route?.realityStatus==='checking') return 'CHECANDO DEPTH';
+  if(route?.realityStatus==='error') return 'FALHA NA CONFIRMAÇÃO';
+  if(route?.realityStatus==='rejected') return 'DEPTH REJEITOU';
+  return `CONFIRMANDO ${streak}/${required}`;
 }
 
 function renderExchangeHealth(data){
@@ -110,8 +124,8 @@ function renderExchangeHealth(data){
 
 function renderTop5(data){
   const {rows,isPositive}=rankingFor(data);
-  $('top5Title').textContent=isPositive?'TOP 5 OPORTUNIDADES':'5 MAIS PRÓXIMAS';
-  $('top5Updated').textContent=`${new Date().toLocaleTimeString('pt-BR')} · ${Number(data?.positiveNet||0)} elegíveis`;
+  $('top5Title').textContent=isPositive?'TOP 5 CONFIRMADAS':(Array.isArray(data?.signals)&&data.signals.length?'SINAIS EM CONFIRMAÇÃO':'5 MAIS PRÓXIMAS');
+  $('top5Updated').textContent=`${new Date().toLocaleTimeString('pt-BR')} · ${Number(data?.confirmedCount||0)} confirmadas · ${Number(data?.positiveNet||0)} sinais +`;
 
   if(rows.length && !rows.some((r)=>routeKey(r)===state.selectedRouteKey)){
     state.selectedRouteKey=routeKey(rows[0]);
@@ -129,7 +143,7 @@ function renderTop5(data){
           <span class="opSymbol">${r.symbol||'—'}</span>
           <span class="opRoute">
             <strong>${directionLabel(r)}</strong>
-            <small>${spread>=0?'+':''}${fmt(spread,3)}% · até ${fmt(executable,0)} USDT</small>
+            <small>${realityLabel(r)} · ${spread>=0?'+':''}${fmt(spread,3)}% · até ${fmt(executable,0)} USDT</small>
           </span>
           <span class="opProfit">
             <b>${Number.isFinite(pnl)?`${pnl>=0?'+':''}${fmt(pnl,2)}`:'—'}</b>
@@ -184,7 +198,7 @@ function venuePriceRail(result){
 }
 
 function renderFocusedOpportunity(data){
-  const {rows}=rankingFor(data);
+  const {rows,mode}=rankingFor(data);
   const selected=rows.find((r)=>routeKey(r)===state.selectedRouteKey)||rows[0]||null;
 
   if(!selected){
@@ -195,6 +209,7 @@ function renderFocusedOpportunity(data){
     return;
   }
 
+  const confirmed=selected?.realityStatus==='confirmed';
   const eligible=Boolean(selected?.eligible);
   const pnl=Number(selected?.netPnlUsdt);
   const spread=Number(selected?.grossSpreadPct);
@@ -209,12 +224,12 @@ function renderFocusedOpportunity(data){
   $('focusCard').innerHTML=`
     <div class="focusHero">
       <div class="focusPair">
-        <span>${eligible?'OPORTUNIDADE ELEGÍVEL':'CANDIDATA MAIS PRÓXIMA'}</span>
+        <span>${confirmed?'OPORTUNIDADE CONFIRMADA':(mode==='signals'?'SINAL EM CONFIRMAÇÃO':'CANDIDATA MAIS PRÓXIMA')}</span>
         <h1>${selected.symbol}</h1>
       </div>
       <div class="focusPnl">
-        <small>líquido execução</small>
-        <strong class="${eligible?'':'near'}">${money(pnl)}</strong>
+        <small>${confirmed?'líquido confirmado':'líquido indicativo'}</small>
+        <strong class="${confirmed?'':'near'}">${money(pnl)}</strong>
       </div>
     </div>
 
@@ -255,11 +270,18 @@ function renderFocusedOpportunity(data){
       <div class="barTrack"><div class="barFill" style="width:${share}%"></div></div>
     </div>
 
-    <div class="tradeHint">
+    <div class="realityStrip">
+      <span class="${confirmed?'verified':'checking'}">${realityLabel(selected)}</span>
+      <span>Depth ${Number(selected?.buyDepthLevels||0)}×${Number(selected?.sellDepthLevels||0)}</span>
+      <span>Saldo pré-posicionado</span>
+      <span>Fill não garantido</span>
+    </div>
+
+    <div class="tradeHint ${confirmed?'verifiedHint':'warningHint'}">
       <i>●</i>
-      <span>${eligible
-        ? `Rota atual: comprar em <b>${exchangeLabel(selected.buyExchange)}</b> e vender em <b>${exchangeLabel(selected.sellExchange)}</b>. Pós-recomposição estimado: <b>${money(afterRebalance)}</b>.`
-        : `Ainda não cruza o breakeven modelado. Não tratar esta linha como executável.`}</span>
+      <span>${confirmed
+        ? `Depth multi-level reconfirmado ${Number(selected?.confirmationStreak||0)}/${Number(selected?.confirmationsRequired||3)}. Comprar em <b>${exchangeLabel(selected.buyExchange)}</b> e vender em <b>${exchangeLabel(selected.sellExchange)}</b>. Pós-recomposição estimado: <b>${money(afterRebalance)}</b>. A oportunidade pode mudar antes do fill.`
+        : `Este é apenas um sinal do broad scan. O Reality Gate ainda não terminou a confirmação de depth/persistência. <b>Não executar como confirmado.</b>`}</span>
     </div>
 
     <details class="priceDisclosure">
@@ -275,7 +297,7 @@ function renderAudit(data){
     ? rows.map((r,index)=>`<div class="auditRow">
         <span>#${index+1}</span>
         <b>${r.symbol}</b>
-        <small>${directionLabel(r)} · ${fmt(r.grossSpreadPct,3)}%</small>
+        <small>${directionLabel(r)} · ${realityLabel(r)} · ${fmt(r.grossSpreadPct,3)}%</small>
         <strong>${money(r.netPnlUsdt)}</strong>
       </div>`).join('')
     : '<div class="emptyState">Sem rotas completas para auditar agora.</div>';
@@ -289,7 +311,8 @@ function renderRadar(data){
   $('radarSummary').textContent=
     `${Number(data?.monitored||0).toLocaleString('pt-BR')} monitorados · `+
     `${Number(data?.liquidResults||0).toLocaleString('pt-BR')} avaliáveis · `+
-    `${Number(data?.positiveNet||0)} elegíveis`;
+    `${Number(data?.confirmedCount||0)} confirmadas · `+
+    `${Number(data?.positiveNet||0)} sinais positivos`;
 
   renderTop5(data);
   renderFocusedOpportunity(data);
