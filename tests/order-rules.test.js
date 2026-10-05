@@ -148,3 +148,25 @@ test('Operational Gate bloqueia depth positivo que não atinge minNotional', () 
   assert.equal(out.orderRulesVerified,true);
   assert.equal(out.reason,'buy_min_notional_failed');
 });
+
+
+test('KuCoin também aceita o formato público v2 baseMinSize/baseIncrement/priceIncrement', () => {
+  const rule=normalizeOrderRule('kucoin',{
+    enableTrading:true,
+    baseCurrency:'ABC',
+    quoteCurrency:'USDT',
+    baseMinSize:'0.1',
+    baseMaxSize:'100000',
+    baseIncrement:'0.01',
+    quoteMinSize:'0.1',
+    quoteMaxSize:'1000000',
+    priceIncrement:'0.0001',
+    minFunds:'1',
+  });
+  assert.equal(rule.symbol,'ABCUSDT');
+  assert.equal(rule.complete,true);
+  assert.equal(rule.minQty,0.1);
+  assert.equal(rule.qtyStep,'0.01');
+  assert.equal(rule.tickSize,'0.0001');
+  assert.equal(rule.minNotional,1);
+});
