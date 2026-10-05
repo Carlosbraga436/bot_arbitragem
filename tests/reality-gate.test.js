@@ -102,3 +102,51 @@ test('score de confiança recompensa depth, persistência, sincronismo e capacid
   assert.ok(strong>weak);
   assert.equal(strong,100);
 });
+
+
+test('OPERACIONAL OK só aparece depois do depth 3/3 e regras públicas válidas', async () => {
+  let clock=30_000;
+  const fetchDepth=async(exchange,symbol)=>{
+    const side=exchange==='binance'?'buy':'sell';
+    return profitableBook(exchange,symbol,side,clock);
+  };
+  const gate=createRealityGate({
+    fetchDepth,
+    now:()=>clock,
+    config:{requiredStreak:3,minCheckIntervalMs:0,persistenceGapMs:5_000,confirmationTtlMs:6_000},
+  });
+  const route={symbol:'TESTUSDT',buyExchange:'binance',sellExchange:'bybit',eligible:true,netPnlUsdt:1};
+  const rule={
+    complete:true,minQty:0.01,maxQty:1000,qtyStep:'0.01',minNotional:1,maxNotional:null,
+    tickSize:'0.01',minPrice:null,maxPrice:null,source:'fixture',
+  };
+  const context={
+    asset:{identityConfirmed:true},
+    budgetUsdt:100,
+    costs:{exchangeFeePct:{binance:0,bybit:0},reservePct:0,recompositionUsdt:0},
+    orderRulesByExchange:{binance:rule,bybit:rule},
+  };
+
+  let s=await gate.check(route,context);
+  assert.equal(s.confirmationStreak,1);
+  assert.equal(s.orderRulesVerified,true);
+  assert.equal(s.operationalOk,false);
+  assert.equal(s.operationalReason,'awaiting_persistence');
+
+  clock+=1_000;
+  s=await gate.check(route,context);
+  assert.equal(s.confirmationStreak,2);
+  assert.equal(s.operationalOk,false);
+
+  clock+=1_000;
+  s=await gate.check(route,context);
+  assert.equal(s.confirmed,true);
+  assert.equal(s.operationalOk,true);
+  assert.equal(s.operationalReason,'operational_ok');
+
+  const top=gate.confirmed([route],100);
+  assert.equal(top.length,1);
+  assert.equal(top[0].operationalOk,true);
+  assert.equal(top[0].orderRulesVerified,true);
+  assert.ok(top[0].operationalPlan?.baseQty>0);
+});
