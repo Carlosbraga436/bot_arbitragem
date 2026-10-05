@@ -390,6 +390,16 @@ function radarSnapshot(runtime,budgetUsdt=100) {
   const allPositives=evaluated.results
     .filter((r)=>r?.eligible && Number.isFinite(r?.netPnlUsdt) && r.netPnlUsdt>0);
   const positives=topPositive(allPositives,5);
+  const venueOpportunityCounts={};
+  for (const route of allPositives) {
+    for (const venue of [route.buyExchange,route.sellExchange]) {
+      if (!venue) continue;
+      venueOpportunityCounts[venue]=(venueOpportunityCounts[venue]||0)+1;
+    }
+  }
+  const newVenuePositives=allPositives
+    .filter((route)=>['bitget','htx'].includes(route.buyExchange)||['bitget','htx'].includes(route.sellExchange))
+    .sort((a,b)=>(b.netPnlUsdt??-Infinity)-(a.netPnlUsdt??-Infinity));
   const nearest=[...finite]
     .filter((r)=>!r?.eligible)
     .sort((a,b)=>(b.netPnlUsdt??-Infinity)-(a.netPnlUsdt??-Infinity))
@@ -411,6 +421,9 @@ function radarSnapshot(runtime,budgetUsdt=100) {
     pairsWith2PlusVenues:evaluated.pairsWith2PlusVenues,
     liquidResults:finite.length,
     positiveNet:allPositives.length,
+    positiveByVenue:venueOpportunityCounts,
+    newVenuePositiveCount:newVenuePositives.length,
+    topNewVenueRoute:newVenuePositives[0]||null,
     top5:positives,
     nearest5:nearest,
     reasonCounts,
@@ -475,6 +488,18 @@ function marketDiagnostics(runtime,budgetUsdt=100) {
     pairsWith2PlusVenues:radar.pairsWith2PlusVenues,
     finiteResults:radar.liquidResults,
     positiveNet:radar.positiveNet,
+    positiveByVenue:radar.positiveByVenue,
+    newVenuePositiveCount:radar.newVenuePositiveCount,
+    topNewVenueRoute:radar.topNewVenueRoute ? {
+      symbol:radar.topNewVenueRoute.symbol,
+      buyExchange:radar.topNewVenueRoute.buyExchange,
+      sellExchange:radar.topNewVenueRoute.sellExchange,
+      buyVwap:radar.topNewVenueRoute.buyVwap,
+      sellVwap:radar.topNewVenueRoute.sellVwap,
+      grossSpreadPct:radar.topNewVenueRoute.grossSpreadPct,
+      netPnlUsdt:radar.topNewVenueRoute.netPnlUsdt,
+      executableBudgetUsdt:radar.topNewVenueRoute.executableBudgetUsdt,
+    }:null,
     reasonCounts:radar.reasonCounts,
     topGross:topGross ? {
       symbol:topGross.symbol,
