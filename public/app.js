@@ -1,3 +1,5 @@
+import { createManualAuditController } from './manual-audit.js';
+
 const EXCHANGES=['binance','bybit','okx','gate','kucoin','bitget','htx'];
 
 const state={
@@ -225,6 +227,15 @@ function venuePriceRail(result){
   }).join('')}</div>`;
 }
 
+function selectedRoute(data=state.lastRadar){
+  const {rows}=rankingFor(data);
+  return rows.find((r)=>routeKey(r)===state.selectedRouteKey)||rows[0]||null;
+}
+
+const manualAudit=createManualAuditController({
+  getSelectedRoute:()=>selectedRoute(),
+});
+
 function renderFocusedOpportunity(data){
   const {rows,mode}=rankingFor(data);
   const selected=rows.find((r)=>routeKey(r)===state.selectedRouteKey)||rows[0]||null;
@@ -319,11 +330,18 @@ function renderFocusedOpportunity(data){
           : `Este é apenas um sinal do broad scan. O Reality Gate ainda não terminou a confirmação de depth/persistência. <b>Não executar como confirmado.</b>`}</span>
     </div>
 
+    <button id="manualCheckBtn" class="manualCheckButton" type="button">
+      <span><b>Conferir manualmente</b><small>snapshot congelado · preços · regras · custos</small></span>
+      <em>Abrir corretoras ↗</em>
+    </button>
+
     <details class="priceDisclosure">
       <summary>Comparar preço nas corretoras</summary>
       ${venuePriceRail(selected)}
     </details>
   `;
+
+  $('manualCheckBtn')?.addEventListener('click',()=>manualAudit.open(selected));
 }
 
 function renderAudit(data){
