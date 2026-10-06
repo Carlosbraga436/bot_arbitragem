@@ -125,6 +125,26 @@
       </div>
     </details>
 
+    <section id="manualAudit" class="manualAuditOverlay" hidden aria-hidden="true">
+      <button class="manualAuditBackdrop" type="button" data-manual-audit-close aria-label="Fechar conferência"></button>
+      <article class="manualAuditSheet" role="dialog" aria-modal="true" aria-labelledby="manualAuditTitle">
+        <div class="sheetHandle" aria-hidden="true"></div>
+        <header class="manualAuditHeader">
+          <div>
+            <span class="eyebrowTiny">CONFERÊNCIA MANUAL</span>
+            <h2 id="manualAuditTitle">—</h2>
+            <small id="manualAuditTime">Snapshot —</small>
+          </div>
+          <button id="manualAuditClose" class="sheetClose" type="button" aria-label="Fechar">×</button>
+        </header>
+        <div id="manualAuditBody" class="manualAuditBody"></div>
+        <div class="manualAuditActions">
+          <button id="manualAuditRefresh" type="button">↻ Atualizar snapshot</button>
+          <button id="manualAuditCopy" type="button">Copiar dados</button>
+        </div>
+      </article>
+    </section>
+
     <footer>
       Somente leitura · saldo pré-posicionado · DEPTH OK + OPERACIONAL OK · regras públicas do par · fill não garantido · sem envio de ordens
     </footer>
