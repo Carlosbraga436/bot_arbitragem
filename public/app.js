@@ -233,7 +233,7 @@ function selectedRoute(data=state.lastRadar){
 }
 
 const manualAudit=createManualAuditController({
-  getSelectedRoute:()=>selectedRoute(),
+  getRadar:()=>state.lastRadar,
 });
 
 function renderFocusedOpportunity(data){
@@ -371,6 +371,7 @@ function renderRadar(data){
   renderTop5(data);
   renderFocusedOpportunity(data);
   renderAudit(data);
+  manualAudit.sync();
 }
 
 function shortAddress(address){
