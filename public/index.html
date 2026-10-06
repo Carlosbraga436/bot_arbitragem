@@ -2,44 +2,157 @@
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Entre • Radar Cripto</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#060b10" />
+  <title>Radar Cripto</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <main class="shell">
-    <header>
-      <div><span class="eyebrow">ENTRE</span><h1>RADAR CRIPTO</h1><p>BINANCE × BYBIT × OKX × GATE.IO × KUCOIN · spot USDT · somente simulação</p></div>
-      <button id="reconnect">Reconectar ↻</button>
+  <main class="appShell">
+    <header class="topbar">
+      <div class="brandBlock">
+        <div class="brandMark">R</div>
+        <div>
+          <span class="brandKicker">RADAR CRIPTO</span>
+          <strong>Arbitragem ao vivo</strong>
+        </div>
+      </div>
+
+      <div class="topActions">
+        <span id="systemHealth" class="healthPill pending"><i></i><span>conectando</span></span>
+        <button id="reconnect" class="iconButton" type="button" aria-label="Reconectar">↻</button>
+      </div>
     </header>
 
-    <section class="card controls">
-      <div><label>Capital máximo por compra</label><strong><span id="budgetLabel">100</span> USDT</strong></div>
-      <div class="pills"><button data-budget="100" class="active">100</button><button data-budget="500">500</button><button data-budget="1000">1.000</button></div>
-      <div><small>Capital máximo nas duas pontas ≈ <span id="capital">200</span> USDT + custos</small></div>
+    <section class="controlStrip" aria-label="Capital máximo">
+      <div class="budgetCopy">
+        <small>CAPITAL MÁXIMO</small>
+        <strong><span id="budgetLabel">100</span> USDT</strong>
+      </div>
+      <div class="budgetTabs">
+        <button type="button" data-budget="100" class="active">100</button>
+        <button type="button" data-budget="500">500</button>
+        <button type="button" data-budget="1000">1.000</button>
+      </div>
     </section>
 
-    <section class="grid2">
-      <article class="card"><div class="statusRow"><b>Binance</b><span id="binanceStatus" class="dot pending">Conectando</span></div><small id="binanceLast">Última cotação: —</small></article>
-      <article class="card"><div class="statusRow"><b>Bybit</b><span id="bybitStatus" class="dot pending">Conectando</span></div><small id="bybitLast">Última cotação: —</small></article>
-      <article class="card"><div class="statusRow"><b>OKX</b><span id="okxStatus" class="dot pending">Conectando</span></div><small id="okxLast">Última cotação: —</small></article>
-      <article class="card"><div class="statusRow"><b>Gate.io</b><span id="gateStatus" class="dot pending">Conectando</span></div><small id="gateLast">Última cotação: —</small></article>
-      <article class="card"><div class="statusRow"><b>KuCoin</b><span id="kucoinStatus" class="dot pending">Conectando</span></div><small id="kucoinLast">Última cotação: —</small></article>
+    <section id="top5Board" class="top5Board" aria-live="polite">
+      <div class="boardHead">
+        <div>
+          <span class="liveDot"></span>
+          <strong id="top5Title">TOP 5 AGORA</strong>
+        </div>
+        <small id="top5Updated">sincronizando…</small>
+      </div>
+      <div id="top5List" class="top5List">
+        <div class="emptyState">Buscando oportunidades executáveis…</div>
+      </div>
     </section>
 
-    <section class="card hero">
-      <span class="eyebrow" id="bestLabel">MELHOR CANDIDATA AGORA</span>
-      <div id="best"><h2>—</h2><p>Aguardando dados recentes nas duas corretoras.</p></div>
+    <section class="focusSection">
+      <div class="sectionLabel">
+        <span>OPORTUNIDADE SELECIONADA</span>
+        <small id="comparables">0 pares comparáveis</small>
+      </div>
+      <article id="focusCard" class="focusCard">
+        <div class="focusLoading">
+          <strong>Carregando radar…</strong>
+          <span>A melhor rota aparecerá aqui.</span>
+        </div>
+      </article>
     </section>
 
-    <section class="card">
-      <div class="sectionHead"><div><h2 id="tableTitle">Top 5 oportunidades elegíveis</h2><p id="summary">Descobrindo pares comuns…</p></div><div class="badge" id="identity">0 comuns</div></div>
-      <div class="costs">Taxas taker modeladas: Binance 0,10% · Bybit 0,10% · OKX spot USDT 0,10% · Gate.io 0,10% · KuCoin conforme classe do par (fallback conservador 0,30%) · reserva 0,05% por ponta. A oportunidade entra no Top 5 pelo líquido da execução. A recomposição estimada de 0,50 USDT aparece separadamente como cenário pós-trade. <span id="breakEven"></span></div>
-      <div class="tableWrap"><table><thead><tr><th>Par</th><th>Direção</th><th>Spread</th><th>Líquido</th><th>Status</th></tr></thead><tbody id="rows"><tr><td colspan="5">Aguardando…</td></tr></tbody></table></div>
+    <details class="secondaryPanel">
+      <summary>
+        <span>
+          <b>Corretoras e conexão</b>
+          <small id="exchangeSummary">7 fontes monitoradas</small>
+        </span>
+        <em>ver status</em>
+      </summary>
+      <div class="exchangeGrid">
+        <article><div><b>Binance</b><span id="binanceStatus" class="dot pending">Conectando</span></div><small id="binanceLast">Última cotação: —</small></article>
+        <article><div><b>Bybit</b><span id="bybitStatus" class="dot pending">Conectando</span></div><small id="bybitLast">Última cotação: —</small></article>
+        <article><div><b>OKX</b><span id="okxStatus" class="dot pending">Conectando</span></div><small id="okxLast">Última cotação: —</small></article>
+        <article><div><b>Gate.io</b><span id="gateStatus" class="dot pending">Conectando</span></div><small id="gateLast">Última cotação: —</small></article>
+        <article><div><b>KuCoin</b><span id="kucoinStatus" class="dot pending">Conectando</span></div><small id="kucoinLast">Última cotação: —</small></article>
+        <article><div><b>Bitget</b><span id="bitgetStatus" class="dot pending">Conectando</span></div><small id="bitgetLast">Última cotação: —</small></article>
+        <article><div><b>HTX</b><span id="htxStatus" class="dot pending">Conectando</span></div><small id="htxLast">Última cotação: —</small></article>
+      </div>
+    </details>
+
+    <details class="secondaryPanel">
+      <summary>
+        <span>
+          <b>Auditoria do Top 5</b>
+          <small id="radarSummary">Aguardando dados…</small>
+        </span>
+        <em>ver detalhes</em>
+      </summary>
+      <div class="auditBody">
+        <div id="top5Audit" class="auditList"></div>
+        <p class="auditNote">O broad scan encontra sinais. DEPTH OK exige depth multi-level + persistência. OPERACIONAL OK exige também regras públicas do par (lote, step, valor mínimo e tick) e recálculo após arredondamento. Fill nunca é garantido.</p>
+      </div>
+    </details>
+
+    <details id="dexModule" class="secondaryPanel dexPanel">
+      <summary>
+        <span>
+          <b>DEX ↔ CEX</b>
+          <small id="dexSummary">Beta same-chain · validação por contrato</small>
+        </span>
+        <em>abrir radar DEX</em>
+      </summary>
+
+      <div class="dexBody">
+        <article id="dexBest" class="dexBest">
+          <div class="focusLoading">
+            <strong>Inicializando DEX…</strong>
+            <span>Validando contratos, pools e quotes.</span>
+          </div>
+        </article>
+
+        <div id="dexFunnel" class="funnel">
+          <div class="funnelReasons">Montando funil de confirmação…</div>
+        </div>
+
+        <div id="dexList" class="dexList"></div>
+
+        <details class="rulesDisclosure">
+          <summary>Como validamos DEX ↔ CEX</summary>
+          <p>Ethereum, Arbitrum, Base, Polygon e BNB Chain, com liquidação em USDT da própria rede. Identidade automática exige contrato exato, chainId e concordância entre fontes. Pools fracos, quotes não confirmados, profundidade insuficiente e rebalanceamentos restritos ficam fora das rotas elegíveis.</p>
+        </details>
+      </div>
+    </details>
+
+    <section id="manualAudit" class="manualAuditOverlay" hidden aria-hidden="true">
+      <button class="manualAuditBackdrop" type="button" data-manual-audit-close aria-label="Fechar conferência"></button>
+      <article class="manualAuditSheet" role="dialog" aria-modal="true" aria-labelledby="manualAuditTitle">
+        <div class="sheetHandle" aria-hidden="true"></div>
+        <header class="manualAuditHeader">
+          <div class="manualAuditNav">
+            <button id="manualAuditBack" class="sheetBack" type="button">← Voltar ao radar</button>
+            <button id="manualAuditClose" class="sheetClose" type="button" aria-label="Fechar">×</button>
+          </div>
+          <div class="manualAuditHeading">
+            <span class="eyebrowTiny">CONFERÊNCIA AO VIVO</span>
+            <h2 id="manualAuditTitle">—</h2>
+            <small id="manualAuditTime">Aguardando atualização…</small>
+          </div>
+        </header>
+        <div id="manualAuditBody" class="manualAuditBody"></div>
+        <div class="manualAuditActions">
+          <button id="manualAuditRefresh" type="button">↻ Atualizar agora</button>
+          <button id="manualAuditCopy" type="button">Copiar dados</button>
+        </div>
+      </article>
     </section>
 
-    <footer>Sem depósito · sem API key · sem envio de ordens · 5 exchanges · universo USDT dinâmico · O valor selecionado é um teto, não uma obrigação de usar tudo. O radar mantém oportunidades parcialmente executáveis e informa quanto cabe no book visível. Top 5 exige lucro líquido da execução após taxas + reserva; recomposição é cenário separado.</footer>
+    <footer>
+      Somente leitura · saldo pré-posicionado · DEPTH OK + OPERACIONAL OK · regras públicas do par · fill não garantido · sem envio de ordens
+    </footer>
   </main>
+
   <script type="module" src="/app.js"></script>
 </body>
 </html>

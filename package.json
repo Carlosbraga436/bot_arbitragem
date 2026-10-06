@@ -1,13 +1,13 @@
 {
   "name": "radar-cripto-carlos",
-  "version": "0.19.1-recovery.1",
+  "version": "0.30.0-recovery.1",
   "private": true,
   "type": "module",
-  "description": "Radar Cripto multi-exchange Binance x Bybit x OKX x Gate.io x KuCoin com universo dinâmico spot USDT. Somente leitura/simulação, sem ordens.",
+  "description": "Radar Cripto mobile-first com 7 CEXs + DEX same-chain, Opportunity Board com Reality Gate + Operational Gate, Top 5 por depth/persistência e regras públicas do par, ticket de execução, conferência ao vivo com rota travada e custos conservadores. Somente leitura/simulação.",
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
-    "check": "node --check server.js && node --check src/core.js && node --check src/market-hub.js && node --check public/app.js && node --check scripts/diagnose-live.js",
+    "check": "node --check server.js && node --check src/core.js && node --check src/market-hub.js && node --check src/dex-registry.js && node --check src/dex-direct-quote.js && node --check src/cex-depth.js && node --check src/order-rules.js && node --check src/reality-gate.js && node --check src/cex-network.js && node --check src/dex-radar.js && node --check public/exchange-links.js && node --check public/manual-audit.js && node --check public/app.js && node --check scripts/diagnose-live.js",
     "diagnose": "node scripts/diagnose-live.js"
   },
   "engines": {

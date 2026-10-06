@@ -11,6 +11,8 @@ export const GATE_HEARTBEAT_MS = 10_000;
 export const AGGREGATE_POLL_MS = 1_000;
 export const KUCOIN_POLL_MS = 4_000;
 export const KUCOIN_MAX_BACKOFF_MS = 30_000;
+export const BITGET_POLL_MS = 1_000;
+export const HTX_POLL_MS = 1_000;
 
 const BINANCE_WS = 'wss://stream.binance.com:443/ws';
 const BINANCE_DISCOVERY_WS = `${BINANCE_WS}/${BINANCE_DISCOVERY_STREAM}`;
@@ -18,6 +20,8 @@ const GATE_WS = 'wss://api.gateio.ws/ws/v4/';
 const BYBIT_REST_BASES = ['https://api.bybit.com','https://api.bytick.com'];
 const OKX_REST_BASES = ['https://www.okx.com','https://openapi.okx.com'];
 const KUCOIN_REST_BASES = ['https://api.kucoin.com'];
+const BITGET_REST_BASES = ['https://api.bitget.com'];
+const HTX_REST_BASES = ['https://api.huobi.pro','https://api-aws.huobi.pro'];
 
 export function chunkTopics(items, size = 10) {
   const n = Math.max(1, Number(size) || 10);
@@ -45,6 +49,8 @@ export function buildMultiExchangeUniverse({
   okxSymbols = [],
   gateSymbols = [],
   kucoinSymbols = [],
+  bitgetSymbols = [],
+  htxSymbols = [],
 } = {}) {
   const map = new Map();
 
@@ -56,7 +62,7 @@ export function buildMultiExchangeUniverse({
       name: String(base).toUpperCase(),
       symbol,
       quote: 'USDT',
-      venues: { binance:null, bybit:false, okx:false, gate:false, kucoin:false },
+      venues: { binance:null, bybit:false, okx:false, gate:false, kucoin:false, bitget:false, htx:false },
       feePctByExchange: {},
       identityConfirmed: true,
       identityMethod: 'exact_base+USDT_exchange_catalog_or_live_probe',
@@ -106,6 +112,25 @@ export function buildMultiExchangeUniverse({
     const enabled = x?.tradingStatus === 'TradingEnabled' || x?.enableTrading === true;
     if (enabled && x?.quoteCurrency === 'USDT' && x?.baseCurrency) {
       upsert(x.baseCurrency, 'kucoin', kucoinFeePct(x));
+    }
+  }
+
+  for (const x of bitgetSymbols) {
+    const online = String(x?.status || '').toLowerCase() === 'online';
+    const crypto = !x?.symbolType || String(x.symbolType).toLowerCase() === 'crypto';
+    const rwa = String(x?.isRwa || 'NO').toUpperCase() === 'YES'
+      || String(x?.isReality || 'no').toLowerCase() === 'yes';
+    if (online && crypto && !rwa && x?.quoteCoin === 'USDT' && x?.baseCoin) {
+      upsert(x.baseCoin, 'bitget', 0.10);
+    }
+  }
+
+  for (const x of htxSymbols) {
+    const state = String(x?.state || '').toLowerCase();
+    const base = x?.bc || x?.['base-currency'] || x?.baseCurrency;
+    const quote = String(x?.qc || x?.['quote-currency'] || x?.quoteCurrency || '').toUpperCase();
+    if (state === 'online' && quote === 'USDT' && base) {
+      upsert(base, 'htx', 0.20);
     }
   }
 
@@ -193,7 +218,7 @@ async function fetchJson(url, timeoutMs = 5_000) {
   try {
     const r = await fetch(url, {
       signal: controller.signal,
-      headers: { 'user-agent':'radar-cripto-carlos/0.18-recovery' },
+      headers: { 'user-agent':'radar-cripto-carlos/0.24.0-recovery' },
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return await r.json();
@@ -216,11 +241,20 @@ async function fetchFirstJson(bases, path, validate) {
   throw new Error(errors.join(' | '));
 }
 
-export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols = [], logger = console } = {}) {
+export function createMarketHub({
+  symbols = [],
+  gateSymbols = [],
+  kucoinSymbols = [],
+  bitgetSymbols = [],
+  htxSymbols = [],
+  logger = console,
+} = {}) {
   const monitored = [...new Set(symbols)].slice(0, MAX_MONITORED_SYMBOLS);
   const monitoredSet = new Set(monitored);
   const gateSet = new Set(gateSymbols.filter((x)=>monitoredSet.has(x)));
   const kucoinSet = new Set(kucoinSymbols.filter((x)=>monitoredSet.has(x)));
+  const bitgetSet = new Set(bitgetSymbols.filter((x)=>monitoredSet.has(x)));
+  const htxSet = new Set(htxSymbols.filter((x)=>monitoredSet.has(x)));
 
   const books = {
     binance:new Map(),
@@ -228,6 +262,8 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     okx:new Map(),
     gate:new Map(),
     kucoin:new Map(),
+    bitget:new Map(),
+    htx:new Map(),
   };
   const status = {
     binance:{state:'idle',last:null,error:null},
@@ -235,6 +271,8 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     okx:{state:'idle',last:null,error:null},
     gate:{state:'idle',last:null,error:null},
     kucoin:{state:'idle',last:null,error:null},
+    bitget:{state:'idle',last:null,error:null},
+    htx:{state:'idle',last:null,error:null},
   };
   const diagnostics = {
     binanceFirstQuoteAt:null,
@@ -242,6 +280,8 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     okxFirstQuoteAt:null,
     gateFirstQuoteAt:null,
     kucoinFirstQuoteAt:null,
+    bitgetFirstQuoteAt:null,
+    htxFirstQuoteAt:null,
     binanceSubscribedBatches:0,
     binanceSocketReconnects:0,
     binanceDiscoveredSymbols:0,
@@ -254,13 +294,21 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     okxPollsFailed:0,
     kucoinPollsOk:0,
     kucoinPollsFailed:0,
+    bitgetPollsOk:0,
+    bitgetPollsFailed:0,
+    htxPollsOk:0,
+    htxPollsFailed:0,
     bybitLastPollCount:0,
     okxLastPollCount:0,
     kucoinLastPollCount:0,
+    bitgetLastPollCount:0,
+    htxLastPollCount:0,
     gateQuoteCount:0,
     bybitRestSource:null,
     okxRestSource:null,
     kucoinRestSource:null,
+    bitgetRestSource:null,
+    htxRestSource:null,
   };
 
   const binanceSockets = new Map();
@@ -279,6 +327,8 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
   let bybitGeneration = 0;
   let okxGeneration = 0;
   let kucoinGeneration = 0;
+  let bitgetGeneration = 0;
+  let htxGeneration = 0;
   let kucoinNextPollMs = KUCOIN_POLL_MS;
 
   function later(fn, delay) {
@@ -663,6 +713,116 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     poll();
   }
 
+  async function fetchBitgetSnapshot() {
+    const result = await fetchFirstJson(
+      BITGET_REST_BASES,
+      '/api/v3/market/tickers?category=SPOT',
+      (data)=>data?.code === '00000' && Array.isArray(data?.data),
+    );
+    return {
+      base:result.base,
+      list:result.data.data,
+      ts:Number(result.data?.requestTime) || Date.now(),
+    };
+  }
+
+  function connectBitget() {
+    if (stopped || !bitgetSet.size) {
+      setStatus('bitget','idle','no_symbols');
+      return;
+    }
+    const generation = ++bitgetGeneration;
+    setStatus('bitget','connecting');
+
+    const poll = async () => {
+      if (stopped || generation !== bitgetGeneration) return;
+      try {
+        const result = await fetchBitgetSnapshot();
+        let count = 0;
+        for (const raw of result.list) {
+          const symbol=String(raw?.symbol || '').toUpperCase();
+          if (!bitgetSet.has(symbol)) continue;
+          if (storeBook('bitget',symbol,{
+            bidPrice:raw?.bid1Price,bidQty:raw?.bid1Size,
+            askPrice:raw?.ask1Price,askQty:raw?.ask1Size,
+            ts:Number(raw?.ts) || result.ts,
+          })) count += 1;
+        }
+        diagnostics.bitgetPollsOk += 1;
+        diagnostics.bitgetLastPollCount = count;
+        diagnostics.bitgetRestSource = result.base;
+        if (count > 0 && !diagnostics.bitgetFirstQuoteAt) {
+          diagnostics.bitgetFirstQuoteAt = Date.now();
+          logger.info('[market] Bitget primeiro snapshot agregado',count,'pares');
+        }
+        if (count === 0) setStatus('bitget','error','empty_ticker_snapshot');
+      } catch (error) {
+        diagnostics.bitgetPollsFailed += 1;
+        setStatus('bitget','error',error?.message || 'rest_poll_failed');
+        logger.warn('[market] Bitget snapshot falhou',error?.message || error);
+      } finally {
+        if (!stopped && generation === bitgetGeneration) later(poll,BITGET_POLL_MS);
+      }
+    };
+    poll();
+  }
+
+  async function fetchHtxSnapshot() {
+    const result = await fetchFirstJson(
+      HTX_REST_BASES,
+      '/market/tickers',
+      (data)=>data?.status === 'ok' && Array.isArray(data?.data),
+    );
+    return {
+      base:result.base,
+      list:result.data.data,
+      ts:Number(result.data?.ts) || Date.now(),
+    };
+  }
+
+  function connectHtx() {
+    if (stopped || !htxSet.size) {
+      setStatus('htx','idle','no_symbols');
+      return;
+    }
+    const generation = ++htxGeneration;
+    setStatus('htx','connecting');
+
+    const poll = async () => {
+      if (stopped || generation !== htxGeneration) return;
+      try {
+        const result = await fetchHtxSnapshot();
+        let count = 0;
+        for (const raw of result.list) {
+          const pair=String(raw?.symbol || '').toLowerCase();
+          if (!pair.endsWith('usdt')) continue;
+          const symbol=canonicalSymbol(pair.slice(0,-4));
+          if (!htxSet.has(symbol)) continue;
+          if (storeBook('htx',symbol,{
+            bidPrice:raw?.bid,bidQty:raw?.bidSize,
+            askPrice:raw?.ask,askQty:raw?.askSize,
+            ts:result.ts,
+          })) count += 1;
+        }
+        diagnostics.htxPollsOk += 1;
+        diagnostics.htxLastPollCount = count;
+        diagnostics.htxRestSource = result.base;
+        if (count > 0 && !diagnostics.htxFirstQuoteAt) {
+          diagnostics.htxFirstQuoteAt = Date.now();
+          logger.info('[market] HTX primeiro snapshot agregado',count,'pares');
+        }
+        if (count === 0) setStatus('htx','error','empty_ticker_snapshot');
+      } catch (error) {
+        diagnostics.htxPollsFailed += 1;
+        setStatus('htx','error',error?.message || 'rest_poll_failed');
+        logger.warn('[market] HTX snapshot falhou',error?.message || error);
+      } finally {
+        if (!stopped && generation === htxGeneration) later(poll,HTX_POLL_MS);
+      }
+    };
+    poll();
+  }
+
   function scheduleGateReconnect(pairs, socketIndex, total) {
     if (stopped || gateReconnectTimers.has(socketIndex)) return;
     const retry=(gateRetryCounts.get(socketIndex)||0)+1;
@@ -787,6 +947,8 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     connectOkx();
     connectGate();
     connectKucoin();
+    connectBitget();
+    connectHtx();
   }
 
   function stop() {
@@ -794,6 +956,8 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     bybitGeneration += 1;
     okxGeneration += 1;
     kucoinGeneration += 1;
+    bitgetGeneration += 1;
+    htxGeneration += 1;
     for (const timer of timers) clearTimeout(timer);
     timers.clear();
     clearReconnectMap(binanceReconnectTimers);
@@ -807,6 +971,8 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
     bybitGeneration += 1;
     okxGeneration += 1;
     kucoinGeneration += 1;
+    bitgetGeneration += 1;
+    htxGeneration += 1;
     for (const timer of timers) clearTimeout(timer);
     timers.clear();
     clearReconnectMap(binanceReconnectTimers);
@@ -820,6 +986,8 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
         connectOkx();
         connectGate();
         connectKucoin();
+        connectBitget();
+        connectHtx();
       }
     },250);
   }
@@ -837,6 +1005,8 @@ export function createMarketHub({ symbols = [], gateSymbols = [], kucoinSymbols 
         okx:serialize(books.okx),
         gate:serialize(books.gate),
         kucoin:serialize(books.kucoin),
+        bitget:serialize(books.bitget),
+        htx:serialize(books.htx),
       },
     };
   }

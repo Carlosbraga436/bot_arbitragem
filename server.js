@@ -15,17 +15,23 @@ import {
   exchangeFeePct,
   topPositive,
 } from './src/core.js';
+import { buildDexRadar, dexRegistrySnapshot } from './src/dex-radar.js';
+import { createRealityGate } from './src/reality-gate.js';
+import { buildOrderRulesIndex } from './src/order-rules.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
 const PORT = Number(process.env.PORT || 8787);
 
+const BINANCE_REST_BASES = ['https://data-api.binance.vision','https://api-gcp.binance.com','https://api1.binance.com','https://api2.binance.com'];
 const BYBIT_BASES = ['https://api.bybit.com','https://api.bytick.com'];
 const OKX_BASES = ['https://www.okx.com','https://openapi.okx.com'];
 const GATE_BASES = ['https://api.gateio.ws/api/v4'];
 const KUCOIN_BASES = ['https://api.kucoin.com'];
+const BITGET_BASES = ['https://api.bitget.com'];
+const HTX_BASES = ['https://api.huobi.pro','https://api-aws.huobi.pro'];
 const REQUEST_TIMEOUT_MS = 10_000;
-const APP_VERSION = '0.19.1-recovery.1';
+const APP_VERSION = '0.30.0-recovery.1';
 const RADAR_CACHE_MS = 750;
 
 let runtimePromise = null;
@@ -65,6 +71,23 @@ async function fetchFirst(bases,path,validate=()=>true) {
     }
   }
   throw new Error(errors.join(' | '));
+}
+
+async function fetchBinanceSpotInstruments() {
+  try {
+    const result=await fetchFirst(
+      BINANCE_REST_BASES,
+      '/api/v3/exchangeInfo',
+      (data)=>Array.isArray(data?.symbols),
+    );
+    return {
+      base:result.base,
+      items:result.data.symbols.filter((x)=>x?.status==='TRADING' && x?.quoteAsset==='USDT'),
+      error:null,
+    };
+  } catch (error) {
+    return {base:null,items:[],error:error?.message||String(error)};
+  }
 }
 
 async function fetchBybitSpotInstruments() {
@@ -112,12 +135,42 @@ async function fetchKucoinSpotInstruments() {
   return {base:result.base,items:result.data.data.list};
 }
 
+async function fetchBitgetSpotInstruments() {
+  const result=await fetchFirst(
+    BITGET_BASES,
+    '/api/v3/market/instruments?category=SPOT',
+    (data)=>data?.code==='00000' && Array.isArray(data?.data),
+  );
+  return {base:result.base,items:result.data.data};
+}
+
+async function fetchHtxSpotInstruments() {
+  try {
+    const result=await fetchFirst(
+      HTX_BASES,
+      '/v1/settings/common/market-symbols?symbols=NA',
+      (data)=>data?.status==='ok' && Array.isArray(data?.data),
+    );
+    return {base:result.base,items:result.data};
+  } catch (primaryError) {
+    const fallback=await fetchFirst(
+      HTX_BASES,
+      '/v1/common/symbols',
+      (data)=>data?.status==='ok' && Array.isArray(data?.data),
+    );
+    return {base:fallback.base,items:fallback.data.data,fallback:true,primaryError:primaryError?.message||String(primaryError)};
+  }
+}
+
 async function getCatalog() {
-  const [bybitResult,okxResult,gateResult,kucoinResult]=await Promise.all([
+  const [binanceResult,bybitResult,okxResult,gateResult,kucoinResult,bitgetResult,htxResult]=await Promise.all([
+    fetchBinanceSpotInstruments(),
     fetchBybitSpotInstruments(),
     fetchOkxSpotInstruments(),
     fetchGateSpotPairs(),
     fetchKucoinSpotInstruments(),
+    fetchBitgetSpotInstruments(),
+    fetchHtxSpotInstruments(),
   ]);
 
   const candidates=buildMultiExchangeUniverse({
@@ -125,6 +178,18 @@ async function getCatalog() {
     okxSymbols:okxResult.items,
     gateSymbols:gateResult.items,
     kucoinSymbols:kucoinResult.items,
+    bitgetSymbols:bitgetResult.items,
+    htxSymbols:htxResult.items,
+  });
+
+  const orderRulesIndex=buildOrderRulesIndex({
+    binanceSymbols:binanceResult.items,
+    bybitSymbols:bybitResult.items,
+    okxSymbols:okxResult.items,
+    gateSymbols:gateResult.items,
+    kucoinSymbols:kucoinResult.items,
+    bitgetSymbols:bitgetResult.items,
+    htxSymbols:htxResult.items,
   });
   const monitoredSymbols=selectConfirmedSymbols(candidates,MAX_MONITORED_SYMBOLS);
   const monitoredSet=new Set(monitoredSymbols);
@@ -135,36 +200,56 @@ async function getCatalog() {
   const kucoinSymbols=candidates
     .filter((x)=>monitoredSet.has(x.symbol) && x?.venues?.kucoin)
     .map((x)=>x.symbol);
+  const bitgetSymbols=candidates
+    .filter((x)=>monitoredSet.has(x.symbol) && x?.venues?.bitget)
+    .map((x)=>x.symbol);
+  const htxSymbols=candidates
+    .filter((x)=>monitoredSet.has(x.symbol) && x?.venues?.htx)
+    .map((x)=>x.symbol);
 
   const countVenue=(venue)=>candidates.filter((x)=>x?.venues?.[venue]).length;
 
-  return {
+  const catalog={
     generatedAt:Date.now(),
     version:APP_VERSION,
     sources:{
       binance:'live_websocket_probe',
+      binanceOrderRules:binanceResult.base,
       bybit:bybitResult.base,
       okx:okxResult.base,
       gate:gateResult.base,
       kucoin:kucoinResult.base,
+      bitget:bitgetResult.base,
+      htx:htxResult.base,
     },
     universeMode:'union_of_public_USDT_catalogs+live_books',
     maxMonitored:MAX_MONITORED_SYMBOLS,
+    orderRulesCoverage:orderRulesIndex.coverage,
+    orderRulesBinanceError:binanceResult.error,
     exchangeUniverse:{
       binanceActiveUsdt:null,
       bybitActiveUsdt:countVenue('bybit'),
       okxActiveUsdt:countVenue('okx'),
       gateActiveUsdt:countVenue('gate'),
       kucoinActiveUsdt:countVenue('kucoin'),
+      bitgetActiveUsdt:countVenue('bitget'),
+      htxActiveUsdt:countVenue('htx'),
       candidateUsdt:candidates.length,
     },
     candidates,
     monitoredSymbols,
     gateSymbols,
     kucoinSymbols,
+    bitgetSymbols,
+    htxSymbols,
     confirmed:candidates.length,
     pending:0,
   };
+  Object.defineProperty(catalog,'orderRulesBySymbol',{
+    value:orderRulesIndex.bySymbol,
+    enumerable:false,
+  });
+  return catalog;
 }
 
 async function ensureRuntime() {
@@ -179,18 +264,32 @@ async function ensureRuntime() {
         symbols:catalog.monitoredSymbols,
         gateSymbols:catalog.gateSymbols,
         kucoinSymbols:catalog.kucoinSymbols,
+        bitgetSymbols:catalog.bitgetSymbols,
+        htxSymbols:catalog.htxSymbols,
       });
       marketHub.start();
 
       console.log(
-        `[catalog] ${catalog.exchangeUniverse.candidateUsdt} candidatos USDT; monitorando ${catalog.monitoredSymbols.length}; Gate ${catalog.gateSymbols.length}; KuCoin ${catalog.kucoinSymbols.length}`
+        `[catalog] ${catalog.exchangeUniverse.candidateUsdt} candidatos USDT; monitorando ${catalog.monitoredSymbols.length}; Gate ${catalog.gateSymbols.length}; KuCoin ${catalog.kucoinSymbols.length}; Bitget ${catalog.bitgetSymbols.length}; HTX ${catalog.htxSymbols.length}`
+      );
+      console.log(
+        '[order-rules]',
+        JSON.stringify({
+          coverage:catalog.orderRulesCoverage,
+          binanceSource:catalog.sources.binanceOrderRules,
+          binanceError:catalog.orderRulesBinanceError||null,
+        }),
       );
 
       const runtime={
         catalog,
         marketHub,
         bySymbol:new Map(catalog.candidates.map((x)=>[x.symbol,x])),
+        orderRulesBySymbol:catalog.orderRulesBySymbol,
         radarCache:new Map(),
+        realityGate:createRealityGate(),
+        dexRadarCache:new Map(),
+        dexRadarInFlight:new Map(),
       };
 
       setTimeout(()=>{
@@ -202,6 +301,38 @@ async function ensureRuntime() {
           console.warn('[diagnostics] falhou:',error?.message || error);
         }
       },15_000);
+
+      setTimeout(async()=>{
+        try {
+          const dex=await dexRadarSnapshot(runtime,100);
+          console.log('[dex-diagnostics-100]',JSON.stringify({
+            version:dex.version,
+            mode:dex.mode,
+            registryAssets:dex.registryAssets,
+            manualRegistryAssets:dex.manualRegistryAssets,
+            autoVerifiedAssets:dex.autoVerifiedAssets,
+            autoAllowlistCandidates:dex.autoAllowlistCandidates,
+            poolIdentities:dex.poolIdentities,
+            poolsFound:dex.poolsFound,
+            maxPoolsPerAsset:dex.maxPoolsPerAsset,
+            coverageByChain:dex.coverageByChain,
+            directDex:dex.directDex,
+            lifiDexTools:dex.lifiDexTools,
+            funnel:dex.funnel,
+            preliminaryCount:dex.preliminaryCount,
+            preliminaryTop5:dex.preliminaryTop5,
+            confirmedCount:dex.confirmedCount,
+            depthConfirmedCount:dex.depthConfirmedCount,
+            transferVerifiedCount:dex.transferVerifiedCount,
+            positiveCount:dex.positiveCount,
+            top5:dex.top5,
+            nearest5:dex.nearest5,
+            errors:dex.errors,
+          }));
+        } catch (error) {
+          console.warn('[dex-diagnostics] falhou:',error?.message || error);
+        }
+      },25_000);
 
       return runtime;
     })().catch((error)=>{
@@ -220,6 +351,34 @@ function costsForAsset(asset) {
       ...(asset?.feePctByExchange || {}),
     },
   };
+}
+
+function venueQuotesForSymbol(booksByExchange,now=Date.now()) {
+  const rows=Object.entries(booksByExchange||{}).map(([exchange,book])=>{
+    const bid=Number(book?.bids?.[0]?.[0]);
+    const ask=Number(book?.asks?.[0]?.[0]);
+    const bidQty=Number(book?.bids?.[0]?.[1]);
+    const askQty=Number(book?.asks?.[0]?.[1]);
+    const ts=Number(book?.ts);
+    if (!(bid>0) || !(ask>0) || !(bidQty>0) || !(askQty>0) || !Number.isFinite(ts)) return null;
+    return {
+      exchange,
+      bid,
+      ask,
+      mid:(bid+ask)/2,
+      bidQty,
+      askQty,
+      ts,
+      ageMs:Math.max(0,now-ts),
+    };
+  }).filter(Boolean);
+  const minAsk=rows.reduce((best,row)=>row.ask<(best?.ask??Infinity)?row:best,null);
+  const maxBid=rows.reduce((best,row)=>row.bid>(best?.bid??-Infinity)?row:best,null);
+  return rows.map((row)=>({
+    ...row,
+    bestBuy:row.exchange===minAsk?.exchange,
+    bestSell:row.exchange===maxBid?.exchange,
+  }));
 }
 
 function evaluateRuntime(runtime,budgetUsdt=100) {
@@ -244,6 +403,7 @@ function evaluateRuntime(runtime,budgetUsdt=100) {
       rules:DEFAULT_RULES,
       now,
     });
+    result.venueQuotes=venueQuotesForSymbol(booksByExchange,now);
 
     if (Number.isFinite(result?.netPnlUsdt) && result?.buyExchange && result?.sellExchange) {
       result.breakEvenPct=
@@ -277,8 +437,38 @@ function radarSnapshot(runtime,budgetUsdt=100) {
   const evaluated=evaluateRuntime(runtime,budget);
   const finite=evaluated.results.filter((r)=>Number.isFinite(r?.netPnlUsdt));
   const allPositives=evaluated.results
-    .filter((r)=>r?.eligible && Number.isFinite(r?.netPnlUsdt) && r.netPnlUsdt>0);
-  const positives=topPositive(allPositives,5);
+    .filter((r)=>r?.eligible && Number.isFinite(r?.netPnlUsdt) && r.netPnlUsdt>0)
+    .sort((a,b)=>(b.netPnlUsdt??-Infinity)-(a.netPnlUsdt??-Infinity));
+
+  const broadCandidates=allPositives.slice(0,12);
+  runtime.realityGate.kick(broadCandidates,{
+    budgetUsdt:budget,
+    contextForRoute:(route)=>{
+      const asset=runtime.bySymbol.get(route.symbol);
+      return {
+        asset,
+        costs:costsForAsset(asset),
+        orderRulesByExchange:runtime.orderRulesBySymbol.get(route.symbol)||{},
+      };
+    },
+  });
+
+  const confirmedTop5=runtime.realityGate.confirmed(broadCandidates,budget);
+  const signals=runtime.realityGate.signals(broadCandidates,budget);
+  const realityGate=runtime.realityGate.stats(broadCandidates,budget);
+
+  const venueOpportunityCounts={};
+  for (const route of allPositives) {
+    for (const venue of [route.buyExchange,route.sellExchange]) {
+      if (!venue) continue;
+      venueOpportunityCounts[venue]=(venueOpportunityCounts[venue]||0)+1;
+    }
+  }
+
+  const newVenuePositives=allPositives
+    .filter((route)=>['bitget','htx'].includes(route.buyExchange)||['bitget','htx'].includes(route.sellExchange))
+    .sort((a,b)=>(b.netPnlUsdt??-Infinity)-(a.netPnlUsdt??-Infinity));
+
   const nearest=[...finite]
     .filter((r)=>!r?.eligible)
     .sort((a,b)=>(b.netPnlUsdt??-Infinity)-(a.netPnlUsdt??-Infinity))
@@ -300,13 +490,33 @@ function radarSnapshot(runtime,budgetUsdt=100) {
     pairsWith2PlusVenues:evaluated.pairsWith2PlusVenues,
     liquidResults:finite.length,
     positiveNet:allPositives.length,
-    top5:positives,
+    confirmedCount:confirmedTop5.length,
+    operationalCount:realityGate.operational,
+    signalCount:signals.length,
+    positiveByVenue:venueOpportunityCounts,
+    newVenuePositiveCount:newVenuePositives.length,
+    topNewVenueRoute:newVenuePositives[0]||null,
+    top5:confirmedTop5,
+    signals,
     nearest5:nearest,
+    realityGate,
     reasonCounts,
+    executionModel:{
+      mode:'prepositioned_inventory',
+      label:'Saldo pré-posicionado',
+      simultaneousExecutionAssumed:true,
+      transferModeVerified:false,
+      operationalGateEnabled:true,
+      orderRulesRequiredForOperationalOk:true,
+      fillGuaranteed:false,
+    },
     safety:{
       simulationOnly:true,
       ordersEnabled:false,
       transferabilityVerified:false,
+      depthConfirmationRequired:true,
+      operationalRulesGateRequired:true,
+      persistenceConfirmations:realityGate.requiredStreak,
       anomalyGuardPct:DEFAULT_RULES.maxUnverifiedGrossSpreadPct,
       venueDeviationGuardPct:DEFAULT_RULES.maxVenueDeviationPct,
     },
@@ -316,9 +526,39 @@ function radarSnapshot(runtime,budgetUsdt=100) {
   return body;
 }
 
+async function dexRadarSnapshot(runtime,budgetUsdt=100) {
+  const budget=Number.isFinite(Number(budgetUsdt)) && Number(budgetUsdt)>0
+    ? Number(budgetUsdt)
+    : 100;
+  const cached=runtime.dexRadarCache.get(budget);
+  if (cached && Date.now()-cached.generatedAt<15_000) return cached;
+
+  if (runtime.dexRadarInFlight.has(budget)) {
+    return runtime.dexRadarInFlight.get(budget);
+  }
+
+  const promise=buildDexRadar({
+    snapshot:runtime.marketHub.snapshot(),
+    budgetUsdt:budget,
+    costsForSymbol:(symbol)=>costsForAsset(runtime.bySymbol.get(symbol)),
+  }).then((body)=>({
+    ...body,
+    version:APP_VERSION,
+    budgetUsdt:budget,
+  })).then((body)=>{
+    runtime.dexRadarCache.set(budget,body);
+    return body;
+  }).finally(()=>{
+    runtime.dexRadarInFlight.delete(budget);
+  });
+
+  runtime.dexRadarInFlight.set(budget,promise);
+  return promise;
+}
+
 function marketDiagnostics(runtime,budgetUsdt=100) {
   const radar=radarSnapshot(runtime,budgetUsdt);
-  const candidates=[...radar.top5,...radar.nearest5];
+  const candidates=[...radar.top5,...(radar.signals||[]),...radar.nearest5];
   const topGross=[...candidates]
     .filter((r)=>Number.isFinite(r?.grossPnlUsdt))
     .sort((a,b)=>(b.grossPnlUsdt??-Infinity)-(a.grossPnlUsdt??-Infinity))[0]||null;
@@ -334,6 +574,22 @@ function marketDiagnostics(runtime,budgetUsdt=100) {
     pairsWith2PlusVenues:radar.pairsWith2PlusVenues,
     finiteResults:radar.liquidResults,
     positiveNet:radar.positiveNet,
+    confirmedCount:radar.confirmedCount,
+    operationalCount:radar.operationalCount,
+    signalCount:radar.signalCount,
+    realityGate:radar.realityGate,
+    positiveByVenue:radar.positiveByVenue,
+    newVenuePositiveCount:radar.newVenuePositiveCount,
+    topNewVenueRoute:radar.topNewVenueRoute ? {
+      symbol:radar.topNewVenueRoute.symbol,
+      buyExchange:radar.topNewVenueRoute.buyExchange,
+      sellExchange:radar.topNewVenueRoute.sellExchange,
+      buyVwap:radar.topNewVenueRoute.buyVwap,
+      sellVwap:radar.topNewVenueRoute.sellVwap,
+      grossSpreadPct:radar.topNewVenueRoute.grossSpreadPct,
+      netPnlUsdt:radar.topNewVenueRoute.netPnlUsdt,
+      executableBudgetUsdt:radar.topNewVenueRoute.executableBudgetUsdt,
+    }:null,
     reasonCounts:radar.reasonCounts,
     topGross:topGross ? {
       symbol:topGross.symbol,
@@ -390,7 +646,28 @@ const server=http.createServer(async(req,res)=>{
         mode:'simulation-only',
         ordersEnabled:false,
         version:APP_VERSION,
-        exchanges:['binance','bybit','okx','gate','kucoin'],
+        exchanges:['binance','bybit','okx','gate','kucoin','bitget','htx'],
+        realityGate:{
+          enabled:true,
+          depthConfirmation:true,
+          persistenceConfirmations:3,
+          executionMode:'prepositioned_inventory',
+          fillGuaranteed:false,
+          transferModeVerified:false,
+        },
+        operationalGate:{
+          enabled:true,
+          publicInstrumentRules:true,
+          validates:['minQty','qtyStep','minNotional','tickSize'],
+          orderModel:'marketable_limit_parameters',
+          fillGuaranteed:false,
+        },
+        dexRadar:{
+          enabled:true,
+          mode:'same-chain-read-only',
+          identity:'explicit_cex_mapping+chainId+exact_contract; auto requires Uniswap-list+LI.FI contract agreement',
+          directQuotes:'read-only eth_call first for supported DEXs; LI.FI fallback',
+        },
       });
     }
 
@@ -410,6 +687,21 @@ const server=http.createServer(async(req,res)=>{
       return json(res,200,radarSnapshot(runtime,budget));
     }
 
+    if (url.pathname==='/api/dex-radar') {
+      const runtime=await ensureRuntime();
+      const budget=Number(url.searchParams.get('budget')||100);
+      return json(res,200,await dexRadarSnapshot(runtime,budget));
+    }
+
+    if (url.pathname==='/api/dex-registry') {
+      await ensureRuntime();
+      return json(res,200,{
+        version:APP_VERSION,
+        identityPolicy:'explicit CEX mapping + chainId + exact contract; automatic identities require Uniswap token list and LI.FI exact-contract agreement',
+        assets:dexRegistrySnapshot(),
+      });
+    }
+
     if (url.pathname==='/api/diagnostics') {
       const runtime=await ensureRuntime();
       const budget=Number(url.searchParams.get('budget')||100);
@@ -417,8 +709,9 @@ const server=http.createServer(async(req,res)=>{
     }
 
     if (url.pathname==='/api/reconnect' && req.method==='POST') {
-      const {marketHub,radarCache}=await ensureRuntime();
+      const {marketHub,radarCache,dexRadarCache}=await ensureRuntime();
       radarCache.clear();
+      dexRadarCache.clear();
       marketHub.reconnect();
       return json(res,202,{ok:true,message:'reconnect_requested'});
     }
@@ -430,8 +723,9 @@ const server=http.createServer(async(req,res)=>{
         version:APP_VERSION,
         universeMode:catalog.universeMode,
         sources:catalog.sources,
-        exchanges:['binance','bybit','okx','gate','kucoin'],
+        exchanges:['binance','bybit','okx','gate','kucoin','bitget','htx'],
         feeModel:DEFAULT_COSTS,
+        orderRulesCoverage:catalog.orderRulesCoverage,
         monitoredCount:catalog.monitoredSymbols.length,
         candidateUsdt:catalog.exchangeUniverse.candidateUsdt,
       });
