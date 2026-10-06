@@ -130,16 +130,19 @@
       <article class="manualAuditSheet" role="dialog" aria-modal="true" aria-labelledby="manualAuditTitle">
         <div class="sheetHandle" aria-hidden="true"></div>
         <header class="manualAuditHeader">
-          <div>
-            <span class="eyebrowTiny">CONFERÊNCIA MANUAL</span>
-            <h2 id="manualAuditTitle">—</h2>
-            <small id="manualAuditTime">Snapshot —</small>
+          <div class="manualAuditNav">
+            <button id="manualAuditBack" class="sheetBack" type="button">← Voltar ao radar</button>
+            <button id="manualAuditClose" class="sheetClose" type="button" aria-label="Fechar">×</button>
           </div>
-          <button id="manualAuditClose" class="sheetClose" type="button" aria-label="Fechar">×</button>
+          <div class="manualAuditHeading">
+            <span class="eyebrowTiny">CONFERÊNCIA AO VIVO</span>
+            <h2 id="manualAuditTitle">—</h2>
+            <small id="manualAuditTime">Aguardando atualização…</small>
+          </div>
         </header>
         <div id="manualAuditBody" class="manualAuditBody"></div>
         <div class="manualAuditActions">
-          <button id="manualAuditRefresh" type="button">↻ Atualizar snapshot</button>
+          <button id="manualAuditRefresh" type="button">↻ Atualizar agora</button>
           <button id="manualAuditCopy" type="button">Copiar dados</button>
         </div>
       </article>
