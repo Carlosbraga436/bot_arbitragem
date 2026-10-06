@@ -52,14 +52,34 @@ function realityLabel(route){
 function numberOrDash(value,digits=8){ return Number.isFinite(Number(value))?fmt(Number(value),digits):'—'; }
 function ruleValue(value){ return value===null||value===undefined||value===''?'—':String(value); }
 
-export function createManualAuditController({getSelectedRoute}){
+export function auditRouteKey(route){
+  return route
+    ? [route.symbol||'',route.buyExchange||'',route.sellExchange||''].join('|')
+    : '';
+}
+
+export function selectLockedRoute(data,key){
+  const rows=[
+    ...(Array.isArray(data?.top5)?data.top5:[]),
+    ...(Array.isArray(data?.signals)?data.signals:[]),
+    ...(Array.isArray(data?.nearest5)?data.nearest5:[]),
+  ];
+  return rows.find((route)=>auditRouteKey(route)===key)||null;
+}
+
+export function createManualAuditController({getRadar}){
   let snapshot=null;
   let capturedAt=null;
+  let lockedKey='';
+  let liveState='idle';
+  let opened=false;
+
   const root=document.getElementById('manualAudit');
   const body=document.getElementById('manualAuditBody');
   const title=document.getElementById('manualAuditTitle');
   const time=document.getElementById('manualAuditTime');
   const copyBtn=document.getElementById('manualAuditCopy');
+  const refreshBtn=document.getElementById('manualAuditRefresh');
 
   function legHtml(route,side){
     const buy=side==='buy';
@@ -81,7 +101,7 @@ export function createManualAuditController({getSelectedRoute}){
       '<dl class="manualFacts">',
       '<div><dt>Qtd. no topo</dt><dd>'+numberOrDash(topQty,8)+'</dd></div>',
       '<div><dt>Horário cotação</dt><dd>'+timeLabel(q?.ts)+'</dd></div>',
-      '<div><dt>Idade no snapshot</dt><dd>'+ageLabel(q?.ts,capturedAt)+'</dd></div>',
+      '<div><dt>Idade da cotação</dt><dd>'+ageLabel(q?.ts,capturedAt)+'</dd></div>',
       '<div><dt>'+(buy?'Limite de compra':'Limite de venda')+'</dt><dd>'+numberOrDash(limit,priceDigits(limit))+'</dd></div>',
       '<div><dt>Qtd. mínima</dt><dd>'+ruleValue(rules?.minQty)+'</dd></div>',
       '<div><dt>Step quantidade</dt><dd>'+ruleValue(rules?.qtyStep)+'</dd></div>',
@@ -92,7 +112,9 @@ export function createManualAuditController({getSelectedRoute}){
   }
 
   function costHtml(route){
-    const recomposition=Number.isFinite(Number(route?.netPnlUsdt))&&Number.isFinite(Number(route?.netAfterRebalanceUsdt))?Number(route.netPnlUsdt)-Number(route.netAfterRebalanceUsdt):null;
+    const recomposition=Number.isFinite(Number(route?.netPnlUsdt))&&Number.isFinite(Number(route?.netAfterRebalanceUsdt))
+      ? Number(route.netPnlUsdt)-Number(route.netAfterRebalanceUsdt)
+      : null;
     const rows=[
       ['Bruto',route?.grossPnlUsdt,false],
       ['Taxa compra',route?.buyTradingFeeUsdt,true],
@@ -100,7 +122,7 @@ export function createManualAuditController({getSelectedRoute}){
       ['Reserva',route?.reserveUsdt,true],
       ['Líquido execução',route?.netPnlUsdt,false],
       ['Recomposição',recomposition,true],
-      ['Após recomposição',route?.netAfterRebalanceUsdt,false]
+      ['Após recomposição',route?.netAfterRebalanceUsdt,false],
     ];
     return rows.map(([name,value,cost])=>{
       const n=Number(value);
@@ -113,14 +135,22 @@ export function createManualAuditController({getSelectedRoute}){
     const quotes=Array.isArray(route?.venueQuotes)?[...route.venueQuotes]:[];
     const chosen=[route?.buyExchange,route?.sellExchange];
     quotes.sort((a,b)=>{
-      const ai=chosen.indexOf(a.exchange), bi=chosen.indexOf(b.exchange);
+      const ai=chosen.indexOf(a.exchange);
+      const bi=chosen.indexOf(b.exchange);
       return (ai===-1?99:ai)-(bi===-1?99:bi);
     });
-    if(!quotes.length) return '<div class="emptyState">Sem mapa de preços no snapshot.</div>';
+    if(!quotes.length) return '<div class="emptyState">Sem mapa de preços neste ciclo.</div>';
     return '<div class="manualVenueRows">'+quotes.map((q)=>{
       const role=q.exchange===route?.buyExchange?'COMPRA':(q.exchange===route?.sellExchange?'VENDA':'');
       return '<div class="manualVenueRow"><div><b>'+label(q.exchange)+'</b>'+(role?'<span>'+role+'</span>':'')+'</div><div><small>ask</small><strong>'+numberOrDash(q.ask,priceDigits(q.ask))+'</strong></div><div><small>bid</small><strong>'+numberOrDash(q.bid,priceDigits(q.bid))+'</strong></div><em>'+ageLabel(q.ts,capturedAt)+'</em></div>';
     }).join('')+'</div>';
+  }
+
+  function liveBanner(route){
+    if(liveState==='missing'){
+      return '<div class="snapshotBanner stale"><div><span>PAR TRAVADO</span><b>ROTA FORA DO CICLO</b></div><small>Mantendo os últimos dados de '+timeLabel(capturedAt)+'. O app não troca para outra moeda.</small></div>';
+    }
+    return '<div class="snapshotBanner live"><div><span>AO VIVO · PAR TRAVADO</span><b>'+realityLabel(route)+'</b></div><small>Atualiza com o radar sem trocar '+String(route?.symbol||'—')+' nem a rota.</small></div>';
   }
 
   function render(){
@@ -129,15 +159,19 @@ export function createManualAuditController({getSelectedRoute}){
     const plan=route?.operationalPlan||{};
     const qty=plan?.baseQty||route?.baseQty;
     title.textContent=(route?.symbol||'—')+' · '+label(route?.buyExchange)+' → '+label(route?.sellExchange);
-    time.textContent='Snapshot congelado às '+timeLabel(capturedAt)+' · atualize quando quiser comparar novamente';
+    time.textContent=liveState==='missing'
+      ? 'Último dado às '+timeLabel(capturedAt)+' · aguardando a mesma rota reaparecer'
+      : 'Atualizado automaticamente às '+timeLabel(capturedAt)+' · mesma moeda e mesma rota';
+    if(refreshBtn) refreshBtn.textContent='↻ Atualizar agora';
+
     body.innerHTML=[
-      '<div class="snapshotBanner"><div><span>SNAPSHOT CONGELADO</span><b>'+realityLabel(route)+'</b></div><small>Os números abaixo não mudam enquanto você confere as corretoras.</small></div>',
+      liveBanner(route),
       '<div class="manualLegGrid">'+legHtml(route,'buy')+legHtml(route,'sell')+'</div>',
       '<section class="manualBlock"><div class="manualBlockHead"><b>Ordem simulada</b><small>mesma quantidade nas duas pontas</small></div>',
       '<div class="manualOrderGrid">',
       '<div><span>Quantidade</span><b>'+numberOrDash(qty,8)+'</b></div>',
       '<div><span>Executável</span><b>'+fmt(route?.executableBudgetUsdt||route?.budgetUsdt,2)+' USDT</b></div>',
-      '<div><span>Spread bruto</span><b class="positive">+'+fmt(route?.grossSpreadPct,4)+'%</b></div>',
+      '<div><span>Spread bruto</span><b class="positive">'+(Number(route?.grossSpreadPct)>=0?'+':'')+fmt(route?.grossSpreadPct,4)+'%</b></div>',
       '<div><span>Breakeven</span><b>'+fmt(route?.breakEvenPct,4)+'%</b></div>',
       '<div><span>Depth</span><b>'+Number(route?.buyDepthLevels||0)+' × '+Number(route?.sellDepthLevels||0)+'</b></div>',
       '<div><span>Confirmação</span><b>'+Number(route?.confirmationStreak||0)+'/'+Number(route?.confirmationsRequired||3)+'</b></div>',
@@ -148,17 +182,19 @@ export function createManualAuditController({getSelectedRoute}){
       '<li>Abra as duas corretoras e confirme o mesmo par <strong>'+String(route?.symbol||'').replace('USDT','/USDT')+' Spot</strong>.</li>',
       '<li>Na compra compare o <strong>ask</strong>; na venda compare o <strong>bid</strong>. O “último preço” não é a referência de execução.</li>',
       '<li>Veja se o livro comporta <strong>'+numberOrDash(qty,8)+'</strong> unidades sem consumir preços muito piores.</li>',
-      '<li>Se os números mudaram, volte e toque em <strong>Atualizar snapshot</strong> antes de concluir a conferência.</li>',
-      '</ol><p>A corretora é a referência final antes de qualquer ordem. Fill não é garantido.</p></section>'
+      '<li>A tela atualiza sozinha, mas fica travada em <strong>'+String(route?.symbol||'—')+'</strong> e na rota '+label(route?.buyExchange)+' → '+label(route?.sellExchange)+'.</li>',
+      '</ol><p>Se a rota sumir, os últimos números permanecem visíveis com aviso. Nunca trocamos silenciosamente para outra moeda. Fill não é garantido.</p></section>'
     ].join('');
   }
 
   function textSnapshot(){
     if(!snapshot) return '';
-    const route=snapshot, plan=route?.operationalPlan||{};
-    const buyQ=quote(route,route?.buyExchange), sellQ=quote(route,route?.sellExchange);
+    const route=snapshot;
+    const plan=route?.operationalPlan||{};
+    const buyQ=quote(route,route?.buyExchange);
+    const sellQ=quote(route,route?.sellExchange);
     return [
-      'RADAR CRIPTO — SNAPSHOT '+timeLabel(capturedAt),
+      'RADAR CRIPTO — '+(liveState==='missing'?'ÚLTIMO SNAPSHOT':'SNAPSHOT AO VIVO')+' '+timeLabel(capturedAt),
       (route?.symbol||'—')+' · '+label(route?.buyExchange)+' → '+label(route?.sellExchange),
       'Status: '+realityLabel(route),
       '',
@@ -181,49 +217,79 @@ export function createManualAuditController({getSelectedRoute}){
       'Após recomposição: '+money(route?.netAfterRebalanceUsdt),
       'Breakeven: '+fmt(route?.breakEvenPct,4)+'%',
       '',
-      'Fill não garantido.'
+      'Par/rota travados durante a conferência. Fill não garantido.'
     ].join('\n');
+  }
+
+  function sync(){
+    if(!opened||!lockedKey) return false;
+    const radar=typeof getRadar==='function'?getRadar():null;
+    const route=selectLockedRoute(radar,lockedKey);
+    if(!route){
+      liveState='missing';
+      render();
+      return false;
+    }
+    snapshot=cloneRoute(route);
+    capturedAt=Date.now();
+    liveState='live';
+    render();
+    return true;
   }
 
   function open(route){
     if(!route||!root) return;
+    lockedKey=auditRouteKey(route);
     snapshot=cloneRoute(route);
     capturedAt=Date.now();
+    liveState='live';
+    opened=true;
     render();
     root.hidden=false;
     root.setAttribute('aria-hidden','false');
     document.body.classList.add('auditOpen');
   }
+
   function close(){
     if(!root) return;
+    opened=false;
     root.hidden=true;
     root.setAttribute('aria-hidden','true');
     document.body.classList.remove('auditOpen');
+    document.getElementById('manualCheckBtn')?.focus({preventScroll:true});
   }
+
   function refresh(){
-    const route=typeof getSelectedRoute==='function'?getSelectedRoute():null;
-    if(!route) return;
-    snapshot=cloneRoute(route);
-    capturedAt=Date.now();
-    render();
+    sync();
   }
+
   async function copy(){
     const text=textSnapshot();
     if(!text) return;
     try{ await navigator.clipboard.writeText(text); }
     catch{
       const area=document.createElement('textarea');
-      area.value=text; area.style.position='fixed'; area.style.opacity='0';
-      document.body.appendChild(area); area.select(); document.execCommand('copy'); area.remove();
+      area.value=text;
+      area.style.position='fixed';
+      area.style.opacity='0';
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand('copy');
+      area.remove();
     }
-    if(copyBtn){ const old=copyBtn.textContent; copyBtn.textContent='Copiado ✓'; setTimeout(()=>{copyBtn.textContent=old;},1200); }
+    if(copyBtn){
+      const old=copyBtn.textContent;
+      copyBtn.textContent='Copiado ✓';
+      setTimeout(()=>{copyBtn.textContent=old;},1200);
+    }
   }
 
+  document.getElementById('manualAuditBack')?.addEventListener('click',close);
   document.getElementById('manualAuditClose')?.addEventListener('click',close);
   document.querySelectorAll('[data-manual-audit-close]').forEach((el)=>el.addEventListener('click',close));
-  document.getElementById('manualAuditRefresh')?.addEventListener('click',refresh);
+  refreshBtn?.addEventListener('click',refresh);
   copyBtn?.addEventListener('click',copy);
-  document.addEventListener('keydown',(event)=>{ if(event.key==='Escape'&&!root?.hidden) close(); });
+  document.addEventListener('keydown',(event)=>{ if(event.key==='Escape'&&opened) close(); });
 
-  return {open,close,refresh,copy};
+  return {open,close,refresh,copy,sync,getLockedKey:()=>lockedKey};
 }
