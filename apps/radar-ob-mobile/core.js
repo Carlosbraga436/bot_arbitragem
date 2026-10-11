@@ -37,7 +37,6 @@
     const out={expiry,dir:null,qualified:false,watch:false,sample:0,wins:0,winRate:null,lower:null,breakeven:1/(1+payout),price:null,reason:'',ageSec:null,lastCandle:null};
     if(rows.length<250){out.reason='Histórico insuficiente: mínimo 250 candles fechados.';return out}
     const last=rows[rows.length-1];const age=nowMs-(last.time+60)*1000;out.ageSec=Math.max(0,age/1000);out.lastCandle=last.time;
-    if(age< -1000||age>85000){out.reason='Último candle fechado desatualizado; mercado fechado ou sem dados.';return out}
     const v=indicators(rows),tail=rows.length-1;
     const current=setup(tail,rows,v);out.watch=Boolean(current);out.dir=current;out.price=last.close;
     const start=Math.max(110,Math.floor(rows.length*.60));let lastEnd=-1,w=0,n=0;
@@ -52,6 +51,7 @@
       n++;lastEnd=i+expiry;
     }
     out.sample=n;out.wins=w;out.winRate=n?w/n:null;out.lower=n?lower(w,n):null;
+    if(age< -1000||age>85000){out.reason='Mercado fechado ou preços atrasados. Histórico disponível só para estudo.';return out}
     if(!current){out.reason='Sem configuração técnica nesta última vela.';return out}
     if(n<30){out.reason='Padrão '+current+' observado, mas só '+n+'/30 amostras históricas não sobrepostas.';return out}
     if(out.lower<=out.breakeven+.02){out.reason='Padrão '+current+' sem vantagem estatística demonstrada sobre payout hipotético.';return out}
