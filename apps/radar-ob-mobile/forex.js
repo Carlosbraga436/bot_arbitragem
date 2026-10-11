@@ -11,11 +11,11 @@
     ['AUDUSD','frxAUDUSD','AUD/USD'],
     ['USDCHF','frxUSDCHF','USD/CHF']
   ];
-  const entries=BASE.map(([id,symbol,name])=>({id,symbol,name,type:'FOREX',candles:[],tick:null,feedError:'',analysis:[],requestedAt:0,requests:0,lastMinuteQueried:-1,marketOpen:null,listed:null,historyError:'',tickError:'',lastStatus:'Aguardando fonte'}));
+  const entries=BASE.map(([id,symbol,name])=>({id,symbol,name,type:'FOREX',candles:[],tick:null,feedError:'',analysis:[],requestedAt:0,requests:0,lastMinuteQueried:-1,marketOpen:null,listed:null,historyError:'',tickError:'',lastStatus:'Aguardando fonte',subscribed:false}));
   const bySymbol=new Map(entries.map(x=>[x.symbol,x]));
   const endpoints=['wss://api.derivws.com/trading/v1/options/ws/public','wss://ws.binaryws.com/websockets/v3'];
   let started=true, socket=null,connected=false,receivedSymbols=false,discovered=false,endpointIndex=0,reconnectTimer=null,probeTimer=null,heartbeat=null,attempt=0,market='ALL',expiry='ALL',detail=1,selected='EURUSD',payout=.8;
-  let latestError='',eventCount=0,lastTickAt=0,subscriptionStart=0,historyCount=0;
+  let latestError='',eventCount=0,lastTickAt=0,subscriptionStart=0,historyCount=0,historyProbe=null,fallbackChecked=false;
   const diagnostics=[];
   function log(kind,message){diagnostics.unshift({at:new Date().toISOString(),kind,message:String(message||'').slice(0,280)});if(diagnostics.length>25)diagnostics.pop()}
   function nyClosed(){try{const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',weekday:'short',hour:'2-digit',hourCycle:'h23'}).formatToParts(new Date());const day=parts.find(x=>x.type==='weekday')?.value,h=Number(parts.find(x=>x.type==='hour')?.value);return day==='Sat'||day==='Fri'&&h>=17||day==='Sun'&&h<17}catch(_){return false}}
@@ -28,11 +28,11 @@
   const seconds=x=>((Date.now()-x)/1000);
   function live(x){return started&&connected&&x.tick&&x.tick.received>0&&Date.now()-x.tick.received<4500&&Math.abs(Date.now()-x.tick.epoch*1000)<12000}
   function safeSend(msg){if(socket&&socket.readyState===WebSocket.OPEN){try{socket.send(JSON.stringify(msg));return true}catch(_){}}return false}
-  function removeTimers(){if(reconnectTimer)clearTimeout(reconnectTimer);if(probeTimer)clearTimeout(probeTimer);if(heartbeat)clearInterval(heartbeat);reconnectTimer=probeTimer=heartbeat=null}
+  function removeTimers(){if(reconnectTimer)clearTimeout(reconnectTimer);if(probeTimer)clearTimeout(probeTimer);if(historyProbe)clearTimeout(historyProbe);if(heartbeat)clearInterval(heartbeat);reconnectTimer=probeTimer=historyProbe=heartbeat=null}
   function stop(){
     removeTimers();
     if(socket){const s=socket;socket=null;s.onopen=s.onclose=s.onerror=s.onmessage=null;try{s.close()}catch(_){}}
-    connected=false;receivedSymbols=false;discovered=false;for(const x of entries)x.tick=null;
+    connected=false;receivedSymbols=false;discovered=false;for(const x of entries){x.tick=null;x.subscribed=false}
     render();
   }
   function queueRetry(reason){
@@ -45,9 +45,22 @@
   }
   function queryHistory(x,force=false){if(!started||!connected)return;if(!force&&Date.now()-x.requestedAt<15000)return;x.requestedAt=Date.now();x.requests++;safeSend({ticks_history:x.symbol,style:'candles',granularity:60,count:1000,end:'latest',adjust_start_time:1,req_id:100+BASE.findIndex(v=>v[0]===x.id)});}
   function activate(list){
-    if(discovered)return;
-    discovered=true;
     const meta=list?new Map(list.map(p=>[p.underlying_symbol||p.symbol,p])):null;
+    if(discovered){
+      // Na reabertura da sessão, iniciar assinatura sem exigir que o usuário feche o app.
+      if(meta)for(const x of entries){
+        const item=meta.get(x.symbol);
+        const nextOpen=item?Number(item.exchange_is_open)===1:false;
+        x.listed=Boolean(item);x.marketOpen=nextOpen;
+        if(nextOpen&&!x.subscribed&&!nyClosed()){
+          x.subscribed=safeSend({ticks:x.symbol,subscribe:1,req_id:200+BASE.findIndex(v=>v[0]===x.id)});
+          queryHistory(x,true);
+        }
+        if(!nextOpen){x.subscribed=false;x.lastStatus='Forex fechado pela fonte'}
+      }
+      render();return;
+    }
+    discovered=true;
     for(const x of entries){
       // Mesmo fora da lista de símbolos negociáveis neste instante, o histórico pode existir.
       const item=meta?.get(x.symbol);
@@ -58,8 +71,16 @@
       else x.lastStatus='Histórico solicitado';
       queryHistory(x,true);
       // Não inscrever stream quando explicitamente fechado.
-      if(!marketClosed(x))safeSend({ticks:x.symbol,subscribe:1,req_id:200+BASE.findIndex(v=>v[0]===x.id)});
+      if(!marketClosed(x))x.subscribed=safeSend({ticks:x.symbol,subscribe:1,req_id:200+BASE.findIndex(v=>v[0]===x.id)});
     }
+    if(historyProbe)clearTimeout(historyProbe);
+    historyProbe=setTimeout(()=>{
+      if(!started||!connected||!socket||entries.some(x=>x.candles.length)||fallbackChecked)return;
+      fallbackChecked=true;endpointIndex=(endpointIndex+1)%endpoints.length;
+      log('conexão','Sem histórico na primeira API após 11s: testando canal alternativo');
+      latestError='Sem retorno de histórico: tentando endpoint alternativo';
+      socket.close();
+    },11000);
     render();
   }
   function connect(){
@@ -73,7 +94,7 @@
       clearTimeout(watchdog);if(socket!==sock)return;
       connected=true;attempt=0;subscriptionStart=Date.now();safeSend({active_symbols:'brief',req_id:1});
       probeTimer=setTimeout(()=>{if(socket===sock&&!discovered)activate(null)},2300);
-      heartbeat=setInterval(()=>{if(socket===sock&&connected)safeSend({ping:1})},25000);
+      heartbeat=setInterval(()=>{if(socket===sock&&connected){safeSend({ping:1});safeSend({active_symbols:'brief',req_id:1})}},25000);
       render();
     };
     sock.onmessage=e=>{
@@ -82,7 +103,7 @@
         const trace=errorFor(m),detail=m.error.message||m.error.code||'Erro não especificado';
         if(trace.asset){
           if(trace.operation==='history')trace.asset.historyError=detail;
-          else if(trace.operation==='ticks')trace.asset.tickError=detail;
+          else if(trace.operation==='ticks'){trace.asset.tickError=detail;trace.asset.subscribed=false}
           trace.asset.feedError=detail;
           trace.asset.lastStatus=marketClosed(trace.asset)?'Forex fechado':trace.operation==='history'?'Falha ao obter histórico':'Erro da cotação';
           log('asset '+trace.asset.id,detail);
@@ -240,11 +261,11 @@
     payout=n/100;for(const x of entries)if(x.candles.length)x.analysis=E.map(t=>Engine.score(x.candles,t,payout));
     render();
   })}
-  el('toggle').addEventListener('click',()=>{started=!started;if(started)connect();else stop()});
+  el('toggle').addEventListener('click',()=>{started=!started;if(started){fallbackChecked=false;connect()}else stop()});
   el('expiry').addEventListener('click',e=>{const x=e.target.closest('[data-exp]');if(x){expiry=x.dataset.exp;render()}});
   el('detailExpiry').addEventListener('click',e=>{const x=e.target.closest('[data-detail]');if(x){detail=Number(x.dataset.detail);render()}});
   el('market').addEventListener('click',e=>{const x=e.target.closest('[data-mkt]');if(!x)return;market='FOREX';for(const b of el('market').querySelectorAll('button'))b.classList.toggle('active',b===x);render()});
-  document.addEventListener('visibilitychange',()=>{if(document.hidden)stop();else if(started)connect()});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden)stop();else if(started){fallbackChecked=false;connect()}});
   window.addEventListener('pagehide',stop);
   window.addEventListener('pageshow',()=>{if(started&&!document.hidden&&!socket)connect()});
   if('serviceWorker'in navigator&&location.protocol==='https:')navigator.serviceWorker.register('/sw.js').catch(()=>{});
