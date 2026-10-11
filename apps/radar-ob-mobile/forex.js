@@ -11,7 +11,7 @@
     ['AUDUSD','frxAUDUSD','AUD/USD'],
     ['USDCHF','frxUSDCHF','USD/CHF']
   ];
-  const entries=BASE.map(([id,symbol,name])=>({id,symbol,name,type:'FOREX',candles:[],tick:null,feedError:'',analysis:[],requestedAt:0,requests:0}));
+  const entries=BASE.map(([id,symbol,name])=>({id,symbol,name,type:'FOREX',candles:[],tick:null,feedError:'',analysis:[],requestedAt:0,requests:0,lastMinuteQueried:-1}));
   const bySymbol=new Map(entries.map(x=>[x.symbol,x]));
   const endpoints=['wss://api.derivws.com/trading/v1/options/ws/public','wss://ws.binaryws.com/websockets/v3'];
   let started=true, socket=null,connected=false,receivedSymbols=false,discovered=false,endpointIndex=0,reconnectTimer=null,probeTimer=null,heartbeat=null,attempt=0,market='ALL',expiry='ALL',detail=1,selected='EURUSD',payout=.8;
@@ -38,7 +38,7 @@
     if(attempt%2===0)endpointIndex=(endpointIndex+1)%endpoints.length;
     reconnectTimer=setTimeout(()=>{reconnectTimer=null;connect()},Math.min(8000,2000+attempt*700));
   }
-  function queryHistory(x){if(!started||!connected)return;if(Date.now()-x.requestedAt<15000)return;x.requestedAt=Date.now();x.requests++;safeSend({ticks_history:x.symbol,style:'candles',granularity:60,count:1000,end:'latest',req_id:100+BASE.findIndex(v=>v[0]===x.id)});}
+  function queryHistory(x,force=false){if(!started||!connected)return;if(!force&&Date.now()-x.requestedAt<15000)return;x.requestedAt=Date.now();x.requests++;safeSend({ticks_history:x.symbol,style:'candles',granularity:60,count:1000,end:'latest',req_id:100+BASE.findIndex(v=>v[0]===x.id)});}
   function activate(list){
     if(discovered)return;
     discovered=true;
@@ -91,7 +91,7 @@
         x.tick={price:p,epoch,received:Date.now()};
         lastTickAt=Date.now();eventCount++;
         const last=x.candles.at(-1);
-        if(last&&Math.floor(epoch/60)*60>=last.time+120&&Date.now()-x.requestedAt>16000)queryHistory(x);
+        if(last&&Math.floor(epoch/60)*60>=last.time+60){const minute=Math.floor(epoch/60);if(x.lastMinuteQueried!==minute){x.lastMinuteQueried=minute;queryHistory(x,true);setTimeout(()=>{if(started&&connected&&x.lastMinuteQueried===minute&&x.candles.at(-1)?.time<minute*60-60)queryHistory(x,true)},1700)}}
         render();return;
       }
     };
