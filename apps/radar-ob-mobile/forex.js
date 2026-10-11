@@ -370,9 +370,14 @@
       appendLine('Nova estratégia · teste 40%',r);
       const sub=document.createElement('div');sub.className='sub';sub.style.marginTop='8px';
       const n=r.sample,w=r.lower===null?null:100*r.lower;
+      const e=r.stability?.early,l=r.stability?.late;
+      const subrate=v=>v&&v.sample?v.wins+'/'+v.sample+' ('+(v.winRate*100).toFixed(1)+'%)':'sem amostra';
+      const stable=e?.sample>=10&&l?.sample>=10&&e.winRate>breakeven&&l.winRate>breakeven;
       sub.textContent=(n>0?'Limite inferior (IC unilateral 95%): '+w.toFixed(1)+'%. ':'Sem limite estatístico calculável. ')+
         'Treino: '+r.train.sample+' · Validação: '+n+'. '+
-        (n<25||r.train.sample<30?'AMOSTRA INSUFICIENTE.':r.lower<=breakeven+.02?'Vantagem não demonstrada.':'Filtro histórico passou; necessita simulação prospectiva.');
+        'Primeira metade: '+subrate(e)+' · Segunda: '+subrate(l)+'. '+
+        (n<25||r.train.sample<30||!e||!l||e.sample<10||l.sample<10?'AMOSTRA INSUFICIENTE.':
+        !stable?'RESULTADO INSTÁVEL entre períodos.':r.lower<=breakeven+.02?'Vantagem não demonstrada.':'Passou o filtro histórico; exige validação prospectiva.');
       container.append(sub);root.append(container);
     }
     const foot=document.createElement('p');foot.className='sub';
