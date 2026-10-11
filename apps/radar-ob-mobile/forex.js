@@ -11,11 +11,16 @@
     ['AUDUSD','frxAUDUSD','AUD/USD'],
     ['USDCHF','frxUSDCHF','USD/CHF']
   ];
-  const entries=BASE.map(([id,symbol,name])=>({id,symbol,name,type:'FOREX',candles:[],tick:null,feedError:'',analysis:[],requestedAt:0,requests:0,lastMinuteQueried:-1}));
+  const entries=BASE.map(([id,symbol,name])=>({id,symbol,name,type:'FOREX',candles:[],tick:null,feedError:'',analysis:[],requestedAt:0,requests:0,lastMinuteQueried:-1,marketOpen:null,listed:null,historyError:'',tickError:'',lastStatus:'Aguardando fonte'}));
   const bySymbol=new Map(entries.map(x=>[x.symbol,x]));
   const endpoints=['wss://api.derivws.com/trading/v1/options/ws/public','wss://ws.binaryws.com/websockets/v3'];
   let started=true, socket=null,connected=false,receivedSymbols=false,discovered=false,endpointIndex=0,reconnectTimer=null,probeTimer=null,heartbeat=null,attempt=0,market='ALL',expiry='ALL',detail=1,selected='EURUSD',payout=.8;
   let latestError='',eventCount=0,lastTickAt=0,subscriptionStart=0,historyCount=0;
+  const diagnostics=[];
+  function log(kind,message){diagnostics.unshift({at:new Date().toISOString(),kind,message:String(message||'').slice(0,280)});if(diagnostics.length>25)diagnostics.pop()}
+  function nyClosed(){try{const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',weekday:'short',hour:'2-digit',hourCycle:'h23'}).formatToParts(new Date());const day=parts.find(x=>x.type==='weekday')?.value,h=Number(parts.find(x=>x.type==='hour')?.value);return day==='Sat'||day==='Fri'&&h>=17||day==='Sun'&&h<17}catch(_){return false}}
+  function marketClosed(x){return x.marketOpen===false||nyClosed()&&x.marketOpen!==true}
+  function errorFor(msg){const req=Number(msg?.req_id),sym=msg?.echo_req?.ticks_history||msg?.echo_req?.ticks||msg?.passthrough?.symbol||'';return {asset:bySymbol.get(sym)|| (Number.isInteger(req)&&req>=100&&req<100+BASE.length?entries[req-100]:Number.isInteger(req)&&req>=200&&req<200+BASE.length?entries[req-200]:null),operation:req>=100&&req<200?'history':req>=200&&req<300?'ticks':'general'};}
   const el=id=>document.getElementById(id);
   const label=(id,v)=>{const n=el(id);if(n)n.textContent=v};
   const current=()=>entries.find(x=>x.id===selected)||entries[0];
@@ -38,14 +43,22 @@
     if(attempt%2===0)endpointIndex=(endpointIndex+1)%endpoints.length;
     reconnectTimer=setTimeout(()=>{reconnectTimer=null;connect()},Math.min(8000,2000+attempt*700));
   }
-  function queryHistory(x,force=false){if(!started||!connected)return;if(!force&&Date.now()-x.requestedAt<15000)return;x.requestedAt=Date.now();x.requests++;safeSend({ticks_history:x.symbol,style:'candles',granularity:60,count:1000,end:'latest',req_id:100+BASE.findIndex(v=>v[0]===x.id)});}
+  function queryHistory(x,force=false){if(!started||!connected)return;if(!force&&Date.now()-x.requestedAt<15000)return;x.requestedAt=Date.now();x.requests++;safeSend({ticks_history:x.symbol,style:'candles',granularity:60,count:1000,end:'latest',adjust_start_time:1,req_id:100+BASE.findIndex(v=>v[0]===x.id)});}
   function activate(list){
     if(discovered)return;
     discovered=true;
-    const supported=list?new Set(list.map(p=>p.symbol||p.underlying_symbol).filter(Boolean)):null;
+    const meta=list?new Map(list.map(p=>[p.underlying_symbol||p.symbol,p])):null;
     for(const x of entries){
-      if(supported&&!supported.has(x.symbol)){x.feedError='Símbolo não disponível na fonte';continue}
-      queryHistory(x);safeSend({ticks:x.symbol,subscribe:1,req_id:200+BASE.findIndex(v=>v[0]===x.id)});
+      // Mesmo fora da lista de símbolos negociáveis neste instante, o histórico pode existir.
+      const item=meta?.get(x.symbol);
+      x.listed=meta?Boolean(item):null;
+      x.marketOpen=item?Number(item.exchange_is_open)===1:null;
+      if(x.marketOpen===false)x.lastStatus='Fechado pela fonte';
+      else if(x.listed===false)x.lastStatus='Fora da lista de negociação atual';
+      else x.lastStatus='Histórico solicitado';
+      queryHistory(x,true);
+      // Não inscrever stream quando explicitamente fechado.
+      if(!marketClosed(x))safeSend({ticks:x.symbol,subscribe:1,req_id:200+BASE.findIndex(v=>v[0]===x.id)});
     }
     render();
   }
@@ -65,9 +78,15 @@
     };
     sock.onmessage=e=>{
       let m;try{m=JSON.parse(e.data)}catch(_){return}
-      if(m.error){const id=m.echo_req?.ticks_history||m.echo_req?.ticks;const affected=bySymbol.get(id);
-        if(affected)affected.feedError=m.error.message||m.error.code||'Erro de fonte';
-        else latestError=m.error.message||m.error.code||'Falha na consulta';
+      if(m.error){
+        const trace=errorFor(m),detail=m.error.message||m.error.code||'Erro não especificado';
+        if(trace.asset){
+          if(trace.operation==='history')trace.asset.historyError=detail;
+          else if(trace.operation==='ticks')trace.asset.tickError=detail;
+          trace.asset.feedError=detail;
+          trace.asset.lastStatus=marketClosed(trace.asset)?'Forex fechado':trace.operation==='history'?'Falha ao obter histórico':'Erro da cotação';
+          log('asset '+trace.asset.id,detail);
+        }else{latestError=detail;log('API',detail)}
         if(m.msg_type==='active_symbols'&&!discovered)activate(null);
         render();return;
       }
@@ -76,7 +95,9 @@
         const sym=m.echo_req?.ticks_history||BASE[(m.req_id||100)-100]?.[1],x=bySymbol.get(sym);
         if(!x)return;
         x.candles=Engine.normalizeCandles(m.candles);
-        x.feedError=x.candles.length?'':'Fonte sem candles disponíveis';
+        x.historyError=x.candles.length?'':'Nenhum candle fechado válido na resposta';
+        x.feedError=x.historyError;
+        x.lastStatus=x.candles.length?'Histórico recebido':'Sem histórico válido';
         x.analysis=E.map(t=>Engine.score(x.candles,t,payout));
         historyCount++;render();return;
       }
@@ -88,16 +109,17 @@
         if(epoch*1000>Date.now()+10000||Date.now()-epoch*1000>30000)return;
         const past=x.tick?.epoch??0;
         if(epoch<past)return;
-        x.tick={price:p,epoch,received:Date.now()};
+        x.tick={price:p,epoch,received:Date.now()};x.tickError='';x.feedError='';x.marketOpen=true;x.lastStatus='Tick recebido';
         lastTickAt=Date.now();eventCount++;
         const last=x.candles.at(-1);
         if(last&&Math.floor(epoch/60)*60>=last.time+60){const minute=Math.floor(epoch/60);if(x.lastMinuteQueried!==minute){x.lastMinuteQueried=minute;queryHistory(x,true);setTimeout(()=>{if(started&&connected&&x.lastMinuteQueried===minute&&x.candles.at(-1)?.time<minute*60-60)queryHistory(x,true)},1700)}}
         render();return;
       }
     };
-    sock.onerror=()=>{if(socket!==sock)return;latestError='Não foi possível receber dados da fonte Forex.';render()};
-    sock.onclose=()=>{
+    sock.onerror=()=>{if(socket!==sock)return;latestError='Falha de rede/WebSocket. Verifique a internet ou restrições do navegador.';log('conexão',latestError);render()};
+    sock.onclose=e=>{
       clearTimeout(watchdog);
+      log('conexão','WebSocket encerrado'+(e&&e.code?' (código '+e.code+')':''));
       if(socket!==sock)return;
       socket=null;connected=false;removeTimers();
       for(const x of entries)x.tick=null;
@@ -131,7 +153,7 @@
       left.append(h,d);
       const right=document.createElement('div'),tag=document.createElement('div'),price=document.createElement('div');
       right.className='asset-right';tag.className='status';price.className='val';
-      tag.textContent=live(x)?'AO VIVO':x.feedError?'ERRO DA FONTE':x.candles.length?'AGUARDANDO TICK':'SEM COTAÇÃO';
+      tag.textContent=live(x)?'AO VIVO':marketClosed(x)?'FOREX FECHADO':x.historyError&&!x.candles.length?'FALHA NO HISTÓRICO':x.candles.length?'HISTÓRICO OK':x.feedError?'ERRO DA FONTE':'AGUARDANDO DADOS';
       price.textContent=live(x)?money(x.tick.price):'—';right.append(tag,price);n.append(left,right);
       n.addEventListener('click',()=>{selected=x.id;render();el('analysis').scrollIntoView({behavior:'smooth'})});
       node.append(n);
@@ -147,8 +169,9 @@
     if(!candidates.length){empty.style.display='';label('emptytitle','Nenhum sinal validado');
       let message='';
       if(!connected)message=latestError||'Conectando ao mercado Forex público da Deriv.';
-      else if(!entries.some(x=>x.candles.length))message='Conexão iniciada. Aguardando histórico de candles para calcular os indicadores.';
-      else if(!entries.some(live))message='Sem ticks recentes. Pode ser mercado fechado ou indisponibilidade temporária da fonte.';
+      else if(nyClosed()&&!entries.some(live))message=entries.some(x=>x.candles.length)?'Forex convencional fechado neste momento. Histórico disponível para estudo, mas sem entradas ao vivo.':'Forex convencional fechado neste momento. Tentando obter histórico; caso falhe, o diagnóstico mostrará a resposta da API.';
+      else if(!entries.some(x=>x.candles.length))message=entries.some(x=>x.historyError)?'A fonte respondeu com erro de histórico: '+entries.find(x=>x.historyError).historyError:'Conexão aberta. Aguardando retorno do histórico de candles.';
+      else if(!entries.some(live))message='Sem ticks recentes. Confira o diagnóstico da fonte e a disponibilidade do mercado.';
       else message='Nenhum cenário atende simultaneamente a tendência, estatística e janela de entrada. Isso é normal.';
       label('emptytext',message);
     }else{
@@ -177,7 +200,8 @@
     label('selectedPrice',live(x)?money(x.tick.price):'—');
     label('age',x.tick?seconds(x.tick.received).toFixed(1)+' s':'Indisponível');
     label('direction',r&&qualified(x,r)?r.dir+' · ESTUDO':'SEM ENTRADA');
-    label('reason',r?r.reason:'Histórico de candles ainda não carregado.');
+    label('reason',r?r.reason:x.historyError||x.feedError||'Histórico de candles ainda não carregado.');
+    label('assetDiagnostic',x.historyError?'Histórico: '+x.historyError:x.tickError?'Tick: '+x.tickError:marketClosed(x)?'Mercado Forex fechado; não há cotação ao vivo.':x.lastStatus);
     label('selectedPayout','Hipótese de '+Math.round(payout*100)+'%');
     label('selectedHistory',r&&r.sample?r.wins+'/'+r.sample+' ('+(r.winRate*100).toFixed(1)+'%)':'Insuficiente');
     label('selectedLower',r&&r.lower!==null?(r.lower*100).toFixed(1)+'%':'—');
@@ -206,6 +230,9 @@
     label('feed',entries.some(live)?'Deriv Forex · ticks ao vivo':connected?'Fonte ligada · sem tick recente':'Indisponível');
     label('provider','Deriv · Forex público');
     label('providerDetail','Fonte externa, diferente da IQ Option');
+    label('diagnosticSummary',latestError||(diagnostics.length?diagnostics[0].kind+': '+diagnostics[0].message:connected?'Sem erros detectados na conexão':'Aguardando WebSocket'));
+    label('historyLoaded',entries.filter(x=>x.candles.length>0).length+' de '+entries.length);
+    label('marketStatus',entries.some(live)?'Recebendo preços':nyClosed()?'Fechado (horário de Nova York)':'Aguardando mercado');
     pills();assetList();summarize();details();
   }
   const p=el('payoutInput');if(p){p.value=80;p.addEventListener('change',()=>{
