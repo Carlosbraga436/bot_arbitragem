@@ -1,27 +1,29 @@
-# Radar OB Mobile — Forex independente (V6 experimental)
+# Radar OB Mobile V7 — pesquisa de estratégias Forex (experimental)
 
-## Objetivo
-Monitorar pares de Forex convencionais sem conta na IQ Option. O aplicativo começa ao abrir no iPhone e suspende a conexão WebSocket quando fica oculto/fechado. Sem ordens nem login.
+## Estado
+Aplicativo PWA no Render, sem cadastro, analisa pares Forex da API pública Deriv somente enquanto aberto no iPhone. Não opera na IQ Option, não executa ordens, não fornece sinais garantidos.
 
-## Fonte
-Dados públicos da **Deriv**, diretamente no navegador, via WebSocket com fallback entre:
-- `wss://api.derivws.com/trading/v1/options/ws/public` (nova API pública)
-- `wss://ws.binaryws.com/websockets/v3` (compatibilidade legado)
+### Alterações V7 (2026-10-11)
+- **Comparação honesta entre dois métodos**: baseline V6 mantido intacto; novo setup de tendência/volatilidade/candle pré-fixado (sem ajustar parâmetros no trecho de avaliação).
+- **Validação cronológica**: 60% inicial como referência de desenvolvimento, últimos 40% como teste retrospectivo; ambos os modelos avaliados no mesmo trecho. Isto NÃO é prova prospectiva nem independente de toda a pesquisa já feita.
+- **Regras por expiração**: 1-2 minutos protegem contra exaustão; 3-5 usam confirmação de continuidade; 10-30 requerem tendência mais forte.
+- **Filtros**: relação das EMAs, inclinação da EMA21, ATR normalizado, proporção corpo/pavio, distância da tendência, continuidade da série.
+- **Proteção contra superestimação**: trades não sobrepostos em cada par/prazo; apenas velas fechadas; indicação de número de testes, Wilson unilateral de 95%, mínimo 30 eventos no desenvolvimento e 25 no teste, limite inferior acima do equilíbrio hipotético do payout + 2 pontos percentuais.
+- **Dados**: solicita até 2.500 candles de 1 minuto por ativo; reduz automaticamente para 1.000 se o provedor rejeitar quantidade maior. Ticks via WebSocket; atualização visual no próximo frame; histórico em cache entre ticks.
+- **Nenhuma promessa de melhoria na taxa de acertos**: novos filtros tendem a reduzir a frequência de entradas, mas podem não aumentar a taxa no futuro. Se a validação não demonstrar vantagem, apresenta SEM ENTRADA.
 
-Consulta `active_symbols`, `ticks_history` (candles de 60 segundos) e `ticks` com `subscribe: 1`. A fonte é externa à IQ Option. OTC da IQ Option não é suportado. Nenhuma conta exigida para consultas de mercado, segundo a documentação pública da API Deriv.
+## Premissas do teste
+Indicadores calculados apenas com candles disponíveis no instante do sinal. Entrada hipotética na abertura da próxima vela de 1m e expiração avaliada pelo fechamento da vela apropriada; empates contam como perda. Taxa mostrada não inclui slippage, spread, preço de liquidação real, latência ou payout específico do contrato. Cada vencimento é avaliado separadamente, sem sobreposição de operações dentro de um par e vencimento.
 
-## Análise
-6 pares Forex; 7 prazos de expiração (1,2,3,5,10,15,30min) por par. Indicadores EMA 9/21/50, RSI14, ATR14. Candles precisam estar fechados. Backtest de 40% mais recente dos candles, sem dados futuros para gerar sinal; entrada teórica na abertura da vela seguinte, saída no fechamento após o vencimento, sem sobreposição de operações no mesmo par/prazo. Exibe taxa histórica, amostras e limite inferior de Wilson unilateral a 90%. Exige >=30 amostras e limite inferior > ponto de equilíbrio do payout HIPOTÉTICO + 2pp. Se a última vela está atrasada ou a cotação tem mais de 4,5 segundos, bloqueia todos os candidatos. Apenas nos 8 primeiros segundos da próxima vela considera candidato teórico, ainda NÃO operável.
+O histórico pode conter até 2.500 minutos consecutivos fechados; resultados continuam com amostras pequenas, inclusive devido a filtro adicional. Comparar muitos pares/prazos também gera risco de seleção. Os filtros foram definidos antes desta V7, mas após inspeção de resultados históricos V6; portanto o teste atual ainda é exploratório. Antes de qualquer uso real deve haver acompanhamento prospectivo em conta demonstrativa com sinais e preços executáveis registrados antes do desfecho e auditoria independente.
 
-### Segurança / limitações
-- **Não constitui indicação para executar opções binárias**. A cotação é diferente da IQ Option e o payout é simulado, não verificado.
-- Indicadores e backtests podem apresentar resultados piores ao vivo (viés de seleção, spread, latência, volatilidade e especificidades do contrato). 
-- Não há monitoramento do mercado enquanto o aplicativo não estiver aberto; hospedagem gratuita Render pode levar ~1 min para acordar.
-- Final de semana: Forex convencional fecha; o aplicativo exibe preços ausentes sem inventar sinais.
-- Testes unitários locais do cálculo concluídos; a conexão real Deriv no ambiente de hospedagem/navegador requer validação externa.
+## Fonte e arquitetura
+Deriv WebSocket público em https://developers.deriv.com/docs/data/ticks-history/ e `active_symbols`. Endpoint principal `wss://api.derivws.com/trading/v1/options/ws/public`, fallback `wss://ws.binaryws.com/websockets/v3`. A fonte difere das cotações IQ Option, especialmente OTC. Pares: EUR/USD, GBP/USD, USD/JPY, EUR/JPY, AUD/USD, USD/CHF. Vencimentos simulados: 1, 2, 3, 5, 10, 15, 30 minutos. Não monitora com a página fechada.
 
-## Publicação
-GitHub: `Carlosbraga436/bot_arbitragem`, branch `app/radar-ob-mobile-v5`, apenas pasta `apps/radar-ob-mobile`, sem alterar código do bot de arbitragem. Render service `radar-ob-mobile-carlos` (free); Start command: `cd apps/radar-ob-mobile && npm start`. Arquivos públicos: index.html, core.js e forex.js.
+GitHub: `Carlosbraga436/bot_arbitragem` branch `app/radar-ob-mobile-v5`, pasta isolada `apps/radar-ob-mobile`. Render: serviço `radar-ob-mobile-carlos`. Build `cd apps/radar-ob-mobile && npm install --omit=dev`. Start `cd apps/radar-ob-mobile && npm start`.
 
-## Uso no iPhone
-Abra https://radar-ob-mobile-carlos.onrender.com no Safari, Compartilhar > Adicionar à Tela de Início. A busca começa ao abrir, pode ser pausada. O app não solicita senha de corretora.
+## Critérios de aceitação
+1. Com mercado fechado: carrega histórico, mostra ambas as estratégias e ZERO entradas ao vivo.
+2. Com mercado aberto: atualiza ticks assim que chegam e bloqueia cotações atrasadas.
+3. Se a amostra ou intervalo de confiança não sustenta vantagem: SEM ENTRADA.
+4. Comparação histórica mostra frequência de operações e resultado por estratégia, sem ranking enganoso baseado em acertos brutos.
