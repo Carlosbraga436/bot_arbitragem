@@ -272,20 +272,45 @@
     const root=el('historyStudies');if(!root)return;
     root.replaceChildren();
     const available=entries.filter(x=>x.candles.length>=250);
-    if(!available.length){const p=document.createElement('p');p.className='sub';p.textContent='Aguardando histórico mínimo de 250 candles fechados.';root.append(p);return}
-    // A lista preserva ordem alfabética dos ativos para não destacar apenas bons resultados históricos.
-    const timeFrame=expiry==='ALL'?5:Number(expiry);
-    for(const x of available){
-      const r=x.analysis.find(k=>k.expiry===timeFrame);
-      if(!r)continue;
-      const div=document.createElement('div');div.className='rowinfo';div.style.alignItems='flex-start';
-      const a=document.createElement('span');a.textContent=x.name+' · '+timeFrame+'m';a.style.minWidth='110px';
-      const b=document.createElement('b');b.style.textAlign='right';b.style.fontSize='12px';
-      b.textContent=r.sample===0?'Nenhuma ocorrência histórica':r.wins+'/'+r.sample+' acertos ('+(100*r.winRate).toFixed(1)+'%)'+(r.sample<30?' · amostra pequena':' · estudo retrospectivo');
-      div.append(a,b);root.append(div);
+    const breakeven=1/(1+payout);
+    const selectedTimeFrame=expiry==='ALL'?5:Number(expiry);
+    label('historicalBreakEven',(100*breakeven).toFixed(1)+'%');
+    label('historicalExpiryLabel',expiry==='ALL'?'5m (referência) ':selectedTimeFrame+'m');
+    if(!available.length){
+      const p=document.createElement('p');p.className='sub';
+      p.textContent='Aguardando histórico mínimo de 250 candles fechados.';
+      root.append(p);return;
     }
-    const foot=document.createElement('p');foot.className='sub';foot.textContent='Até 1.000 candles por par; não é previsão, sinal de entrada ou taxa de acerto validada fora da amostra. '+
-      (expiry==='ALL'?'Mostrando 5m; selecione outro vencimento acima para comparar.':'Vencimento selecionado: '+timeFrame+'m.');
+    // Nunca escolher o maior percentual e exibi-lo como "melhor ativo":
+    // isso seria seleção retrospectiva, e amplificaria viés por múltiplas comparações.
+    for(const x of available){
+      const r=x.analysis.find(k=>k.expiry===selectedTimeFrame);
+      if(!r)continue;
+      const div=document.createElement('div');div.className='rowinfo';
+      div.style.alignItems='flex-start';div.style.gap='14px';
+      const name=document.createElement('span');
+      name.style.minWidth='100px';name.style.fontWeight='700';
+      name.textContent=x.name+' · '+selectedTimeFrame+'m';
+      const detail=document.createElement('div');
+      detail.style.textAlign='right';detail.style.fontSize='12px';
+      const wins=document.createElement('div');
+      wins.style.fontWeight='700';wins.style.color='#e7f0f7';
+      const bound=document.createElement('div');
+      bound.style.color='#9bb2c1';bound.style.marginTop='5px';bound.style.lineHeight='1.5';
+      if(!r.sample){
+        wins.textContent='Sem ocorrências históricas';
+        bound.textContent='Não avaliável';
+      }else{
+        wins.textContent=r.wins+'/'+r.sample+' acertos · '+(r.winRate*100).toFixed(1)+'% retrospectivo';
+        const l=r.lower===null?null:r.lower*100;
+        bound.textContent=(l===null?'Limite inferior indisponível':'Limite inferior: '+l.toFixed(1)+'%')+
+          ' · '+(r.sample<30?'Amostra insuficiente':r.lower>breakeven+.02?'Passou filtro histórico; ainda não validado ao vivo':'Sem vantagem estatística demonstrada');
+      }
+      detail.append(wins,bound);div.append(name,detail);root.append(div);
+    }
+    const foot=document.createElement('p');
+    foot.className='sub';
+    foot.textContent='O percentual bruto sozinho não comprova lucratividade. O limite inferior de Wilson considera a incerteza da amostra (90% bilateral). O histórico usa até 1.000 candles por par; não avalia custos, divergências entre plataformas nem desempenho futuro. '+(expiry==='ALL'?'Mostrando 5m como referência; selecione um prazo para comparar.':'Prazo selecionado: '+selectedTimeFrame+'m.');
     root.append(foot);
   }
   function render(){
