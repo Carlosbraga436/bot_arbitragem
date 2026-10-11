@@ -11,7 +11,7 @@
     ['AUDUSD','frxAUDUSD','AUD/USD'],
     ['USDCHF','frxUSDCHF','USD/CHF']
   ];
-  const entries=BASE.map(([id,symbol,name])=>({id,symbol,name,type:'FOREX',candles:[],tick:null,feedError:'',analysis:[],requestedAt:0,requests:0,lastMinuteQueried:-1,marketOpen:null,listed:null,historyError:'',tickError:'',lastStatus:'Aguardando fonte',subscribed:false,marketOpenAt:0,rawOpen:null,suspended:null,subscribeAttempt:0,probeAttempted:false,nextOpenAt:null,marketClosedReason:''}));
+  const entries=BASE.map(([id,symbol,name])=>({id,symbol,name,type:'FOREX',candles:[],tick:null,feedError:'',analysis:[],requestedAt:0,requests:0,historyCountDesired:2500,lastMinuteQueried:-1,marketOpen:null,listed:null,historyError:'',tickError:'',lastStatus:'Aguardando fonte',subscribed:false,marketOpenAt:0,rawOpen:null,suspended:null,subscribeAttempt:0,probeAttempted:false,nextOpenAt:null,marketClosedReason:''}));
   const bySymbol=new Map(entries.map(x=>[x.symbol,x]));
   const endpoints=['wss://api.derivws.com/trading/v1/options/ws/public','wss://ws.binaryws.com/websockets/v3'];
   let started=true, socket=null,connected=false,receivedSymbols=false,discovered=false,endpointIndex=0,reconnectTimer=null,probeTimer=null,heartbeat=null,attempt=0,market='ALL',expiry='ALL',detail=1,selected='EURUSD',payout=.8;
@@ -78,7 +78,7 @@
     if(attempt%2===0)endpointIndex=(endpointIndex+1)%endpoints.length;
     reconnectTimer=setTimeout(()=>{reconnectTimer=null;connect()},Math.min(8000,2000+attempt*700));
   }
-  function queryHistory(x,force=false){if(!started||!connected)return;if(!force&&Date.now()-x.requestedAt<15000)return;x.requestedAt=Date.now();x.requests++;safeSend({ticks_history:x.symbol,style:'candles',granularity:60,count:1000,end:'latest',adjust_start_time:1,req_id:100+BASE.findIndex(v=>v[0]===x.id)});}
+  function queryHistory(x,force=false){if(!started||!connected)return;if(!force&&Date.now()-x.requestedAt<15000)return;x.requestedAt=Date.now();x.requests++;safeSend({ticks_history:x.symbol,style:'candles',granularity:60,count:x.historyCountDesired,end:'latest',adjust_start_time:1,req_id:100+BASE.findIndex(v=>v[0]===x.id)});}
   function activate(list){
     const hasList=Array.isArray(list);
     const meta=hasList?new Map(list.map(p=>[p.underlying_symbol||p.symbol,p])):null;
@@ -132,7 +132,15 @@
       if(m.error){
         const trace=errorFor(m),detail=m.error.message||m.error.code||'Erro não especificado';
         if(trace.asset){
-          if(trace.operation==='history')trace.asset.historyError=detail;
+          if(trace.operation==='history'){
+            trace.asset.historyError=detail;
+            if(trace.asset.historyCountDesired>1000&&!trace.asset.candles.length&&
+              /count|maximum|limit|too many|exceed|range/i.test(detail)){
+              trace.asset.historyCountDesired=1000;
+              setTimeout(()=>{if(started&&connected)queryHistory(trace.asset,true)},350);
+              log('fonte','Histórico longo não aceito para '+trace.asset.id+'; repetindo com 1000 candles.');
+            }
+          }
           else if(trace.operation==='ticks'){trace.asset.tickError=detail;trace.asset.subscribed=false}
           trace.asset.feedError=detail;
           const open=parseMarketOpening(detail);
@@ -257,7 +265,10 @@
     label('reason',r?r.reason:x.historyError||x.feedError||'Histórico de candles ainda não carregado.');
     label('assetDiagnostic',x.historyError?'Histórico: '+x.historyError:x.tickError?'Tick: '+x.tickError:marketClosed(x)?'Deriv informa fechado (exchange_is_open='+String(x.rawOpen)+'). Histórico disponível.':x.lastStatus);
     label('selectedPayout','Hipótese de '+Math.round(payout*100)+'%');
-    label('selectedHistory',r&&r.sample?r.wins+'/'+r.sample+' ('+(r.winRate*100).toFixed(1)+'%)':'Insuficiente');
+    label('selectedHistory',r&&r.sample?r.wins+'/'+r.sample+' ('+(r.winRate*100).toFixed(1)+'%)':'Sem amostra');
+    label('selectedBaseline',r&&r.baseline.sample?r.baseline.wins+'/'+r.baseline.sample+' ('+(100*r.baseline.winRate).toFixed(1)+'%)':'Sem amostra');
+    label('selectedTrain',r?r.train.sample+' ocorrências':'—');
+    label('selectedRegime',r?r.regime:'Aguardando');
     label('selectedLower',r&&r.lower!==null?(r.lower*100).toFixed(1)+'%':'—');
     const svg=el('miniChart');if(svg){
       const rows=x.candles.slice(-60),ns='http://www.w3.org/2000/svg';svg.replaceChildren();
@@ -271,46 +282,43 @@
   function renderHistoryStudies(){
     const root=el('historyStudies');if(!root)return;
     root.replaceChildren();
-    const available=entries.filter(x=>x.candles.length>=250);
-    const breakeven=1/(1+payout);
-    const selectedTimeFrame=expiry==='ALL'?5:Number(expiry);
-    label('historicalBreakEven',(100*breakeven).toFixed(1)+'%');
-    label('historicalExpiryLabel',expiry==='ALL'?'5m (referência) ':selectedTimeFrame+'m');
+    const available=entries.filter(x=>x.candles.length>=500);
+    const breakeven=1/(1+payout),tf=expiry==='ALL'?5:Number(expiry);
+    label('historicalBreakEven',(breakeven*100).toFixed(1)+'%');
+    label('historicalExpiryLabel',expiry==='ALL'?'5m (referência)':tf+'m');
+    label('modelDescription','60% inicial de desenvolvimento · 40% final de avaliação cronológica');
     if(!available.length){
       const p=document.createElement('p');p.className='sub';
-      p.textContent='Aguardando histórico mínimo de 250 candles fechados.';
+      p.textContent='Aguardando pelo menos 500 candles fechados. Histórico será analisado sem inventar resultados.';
       root.append(p);return;
     }
-    // Nunca escolher o maior percentual e exibi-lo como "melhor ativo":
-    // isso seria seleção retrospectiva, e amplificaria viés por múltiplas comparações.
     for(const x of available){
-      const r=x.analysis.find(k=>k.expiry===selectedTimeFrame);
-      if(!r)continue;
-      const div=document.createElement('div');div.className='rowinfo';
-      div.style.alignItems='flex-start';div.style.gap='14px';
-      const name=document.createElement('span');
-      name.style.minWidth='100px';name.style.fontWeight='700';
-      name.textContent=x.name+' · '+selectedTimeFrame+'m';
-      const detail=document.createElement('div');
-      detail.style.textAlign='right';detail.style.fontSize='12px';
-      const wins=document.createElement('div');
-      wins.style.fontWeight='700';wins.style.color='#e7f0f7';
-      const bound=document.createElement('div');
-      bound.style.color='#9bb2c1';bound.style.marginTop='5px';bound.style.lineHeight='1.5';
-      if(!r.sample){
-        wins.textContent='Sem ocorrências históricas';
-        bound.textContent='Não avaliável';
-      }else{
-        wins.textContent=r.wins+'/'+r.sample+' acertos · '+(r.winRate*100).toFixed(1)+'% retrospectivo';
-        const l=r.lower===null?null:r.lower*100;
-        bound.textContent=(l===null?'Limite inferior indisponível':'Limite inferior: '+l.toFixed(1)+'%')+
-          ' · '+(r.sample<30?'Amostra insuficiente':r.lower>breakeven+.02?'Passou filtro histórico; ainda não validado ao vivo':'Sem vantagem estatística demonstrada');
+      const r=x.analysis.find(k=>k.expiry===tf);if(!r)continue;
+      const container=document.createElement('div');container.style.padding='13px 0';
+      container.style.borderBottom='1px solid #26394a';
+      const head=document.createElement('div');head.style.display='flex';
+      head.style.justifyContent='space-between';head.style.alignItems='center';
+      const name=document.createElement('strong');name.textContent=x.name+' · '+tf+'m';
+      const period=document.createElement('span');period.className='count';period.textContent=x.candles.length+' velas disponíveis';
+      head.append(name,period);container.append(head);
+      function appendLine(title,stat){
+        const row=document.createElement('div');row.className='rowinfo';
+        const left=document.createElement('span');left.textContent=title;
+        const right=document.createElement('b');right.style.textAlign='right';
+        right.textContent=stat.sample?stat.wins+'/'+stat.sample+' ('+(stat.winRate*100).toFixed(1)+'%)':'Sem ocorrências';
+        row.append(left,right);container.append(row);
       }
-      detail.append(wins,bound);div.append(name,detail);root.append(div);
+      appendLine('Estratégia anterior · teste 40%',r.baseline);
+      appendLine('Nova estratégia · teste 40%',r);
+      const sub=document.createElement('div');sub.className='sub';sub.style.marginTop='8px';
+      const n=r.sample,w=r.lower===null?null:100*r.lower;
+      sub.textContent=(n>0?'Limite inferior (IC unilateral 95%): '+w.toFixed(1)+'%. ':'Sem limite estatístico calculável. ')+
+        'Treino: '+r.train.sample+' · Validação: '+n+'. '+
+        (n<25||r.train.sample<30?'AMOSTRA INSUFICIENTE.':r.lower<=breakeven+.02?'Vantagem não demonstrada.':'Filtro histórico passou; necessita simulação prospectiva.');
+      container.append(sub);root.append(container);
     }
-    const foot=document.createElement('p');
-    foot.className='sub';
-    foot.textContent='O percentual bruto sozinho não comprova lucratividade. O limite inferior de Wilson considera a incerteza da amostra (90% bilateral). O histórico usa até 1.000 candles por par; não avalia custos, divergências entre plataformas nem desempenho futuro. '+(expiry==='ALL'?'Mostrando 5m como referência; selecione um prazo para comparar.':'Prazo selecionado: '+selectedTimeFrame+'m.');
+    const foot=document.createElement('p');foot.className='sub';
+    foot.textContent='Os dois métodos usam a mesma parte final do histórico, sem calibrar parâmetros sobre esse trecho. Ainda é pesquisa retrospectiva, sujeita a viés de seleção e a diferenças de cotação, spread, latência e payout da corretora. Menos operações não significa melhora comprovada.';
     root.append(foot);
   }
   function render(){
