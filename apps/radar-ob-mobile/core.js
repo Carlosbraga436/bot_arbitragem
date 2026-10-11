@@ -17,7 +17,7 @@ function normalizeCandles(raw,nowMs=Date.now()){
       &&c.time*1000+60000<=nowMs-1000).sort((a,b)=>a.time-b.time);
   const unique=[];
   for(const row of rows){if(unique.length&&unique.at(-1).time===row.time)unique[unique.length-1]=row;else unique.push(row)}
-  return unique.slice(-3200);
+  return unique.slice(-10000);
 }
 function indicators(rows){
   const close=rows.map(r=>r.close),n=close.length;
@@ -127,7 +127,7 @@ function runBacktest(rows,ind,expiry,signal,start,endExclusive){
   }
   return {sample:n,wins:w,ties,winRate:n?w/n:null,lower:lower(w,n)};
 }
-function score(rows,expiry,payout=.80,nowMs=Date.now()){
+function score(rows,expiry,payout=.80,nowMs=Date.now(),sharedIndicators=null){
   if(!EXPIRIES.includes(expiry))throw Error('Vencimento inválido');
   if(!finite(payout)||payout<.5||payout>1)throw Error('Payout fora de 50%-100%');
   const out={
@@ -141,7 +141,7 @@ function score(rows,expiry,payout=.80,nowMs=Date.now()){
   if(rows.length<500){out.reason='São necessários 500 candles fechados para separar treino e validação.';return out}
   const last=rows.at(-1),tail=rows.length-1,age=nowMs-(last.time+60)*1000;
   out.ageSec=Math.max(0,age/1000);out.lastCandle=last.time;out.price=last.close;
-  const ind=indicators(rows);
+  const ind=sharedIndicators||indicators(rows);
   const cutoff=Math.floor(rows.length*.60); // 60% desenvolvimento, 40% validação cronológica.
   const train=runBacktest(rows,ind,expiry,enhancedSetup,70,cutoff);
   const test=runBacktest(rows,ind,expiry,enhancedSetup,cutoff,rows.length-1);
