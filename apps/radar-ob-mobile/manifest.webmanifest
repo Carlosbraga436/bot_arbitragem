@@ -1,0 +1,17 @@
+{
+  "name": "Radar OB Mobile",
+  "short_name": "Radar OB",
+  "description": "Radar experimental de opções binárias sob demanda",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b111b",
+  "theme_color": "#101825",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
