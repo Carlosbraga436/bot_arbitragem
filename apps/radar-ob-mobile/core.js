@@ -135,7 +135,8 @@ function score(rows,expiry,payout=.80,nowMs=Date.now(),sharedIndicators=null){
     breakeven:1/(1+payout),price:null,reason:'',ageSec:null,lastCandle:null,
     train:{sample:0,wins:0,winRate:null,lower:null},
     baseline:{sample:0,wins:0,winRate:null,lower:null},
-    holdoutRatio:.40,confidence:'Wilson unilateral 95%',mode:'enhanced-v7',
+    holdoutRatio:.40,confidence:'Wilson unilateral 95%',mode:'enhanced-v8-history',
+    stability:{early:{sample:0,wins:0,winRate:null},late:{sample:0,wins:0,winRate:null}},
     historyBars:rows.length,regime:'DESCONHECIDO',potential:false
   };
   if(rows.length<500){out.reason='São necessários 500 candles fechados para separar treino e validação.';return out}
@@ -145,8 +146,13 @@ function score(rows,expiry,payout=.80,nowMs=Date.now(),sharedIndicators=null){
   const cutoff=Math.floor(rows.length*.60); // 60% desenvolvimento, 40% validação cronológica.
   const train=runBacktest(rows,ind,expiry,enhancedSetup,70,cutoff);
   const test=runBacktest(rows,ind,expiry,enhancedSetup,cutoff,rows.length-1);
+  const mid=cutoff+Math.floor((rows.length-1-cutoff)/2);
+  const stability={
+    early:runBacktest(rows,ind,expiry,enhancedSetup,cutoff,mid),
+    late:runBacktest(rows,ind,expiry,enhancedSetup,mid,rows.length-1)
+  };
   const baseline=runBacktest(rows,ind,expiry,setup,cutoff,rows.length-1);
-  Object.assign(out,{train,baseline,sample:test.sample,wins:test.wins,winRate:test.winRate,lower:test.lower});
+  Object.assign(out,{train,baseline,stability,sample:test.sample,wins:test.wins,winRate:test.winRate,lower:test.lower});
   const baseDir=setup(tail,rows,ind),advanced=enhancedSetup(tail,rows,ind,expiry);
   out.potential=Boolean(baseDir);out.watch=Boolean(advanced);out.dir=advanced;
   const a=ind.atr[tail],av=ind.atrAvg[tail];
@@ -158,6 +164,12 @@ function score(rows,expiry,payout=.80,nowMs=Date.now(),sharedIndicators=null){
   if(!advanced){out.reason=baseDir?'Padrão antigo observado, mas bloqueado por filtros de tendência, volatilidade ou vela.':'Sem padrão técnico com os critérios atuais.';return out}
   if(train.sample<30){out.reason='Padrão '+advanced+' com apenas '+train.sample+' ocorrências no treino (mínimo 30).';return out}
   if(test.sample<25){out.reason='Padrão '+advanced+' com apenas '+test.sample+' ocorrências na validação cronológica (mínimo 25).';return out}
+  if(stability.early.sample<10||stability.late.sample<10){
+    out.reason='Amostras insuficientes nas duas janelas cronológicas de validação.';return out
+  }
+  if(stability.early.winRate<=out.breakeven||stability.late.winRate<=out.breakeven){
+    out.reason='Resultado inconsistente entre as duas janelas de validação; sinal bloqueado.';return out
+  }
   if(test.lower===null||test.lower<=out.breakeven+.02){out.reason='Sem vantagem estatística demonstrada na validação independente. Não é entrada.';return out}
   out.qualified=true;
   out.reason='Candidato experimental: validação retrospectiva passou, mas falta simulação prospectiva, cotação e payout executáveis.';
