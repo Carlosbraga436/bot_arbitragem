@@ -11,7 +11,7 @@
     ['AUDUSD','frxAUDUSD','AUD/USD'],
     ['USDCHF','frxUSDCHF','USD/CHF']
   ];
-  const entries=BASE.map(([id,symbol,name])=>({id,symbol,name,type:'FOREX',candles:[],tick:null,feedError:'',analysis:[],requestedAt:0,requests:0,historyCountDesired:2500,lastMinuteQueried:-1,marketOpen:null,listed:null,historyError:'',tickError:'',lastStatus:'Aguardando fonte',subscribed:false,marketOpenAt:0,rawOpen:null,suspended:null,subscribeAttempt:0,probeAttempted:false,nextOpenAt:null,marketClosedReason:''}));
+  const entries=BASE.map(([id,symbol,name])=>({id,symbol,name,type:'FOREX',candles:[],tick:null,feedError:'',analysis:[],requestedAt:0,requests:0,historyCountDesired:1000,targetCandles:6000,backfillPages:0,backfillBusy:false,backfillDone:false,backfillEnd:null,analysisBars:0,lastMinuteQueried:-1,marketOpen:null,listed:null,historyError:'',tickError:'',lastStatus:'Aguardando fonte',subscribed:false,marketOpenAt:0,rawOpen:null,suspended:null,subscribeAttempt:0,probeAttempted:false,nextOpenAt:null,marketClosedReason:''}));
   const bySymbol=new Map(entries.map(x=>[x.symbol,x]));
   const endpoints=['wss://api.derivws.com/trading/v1/options/ws/public','wss://ws.binaryws.com/websockets/v3'];
   let started=true, socket=null,connected=false,receivedSymbols=false,discovered=false,endpointIndex=0,reconnectTimer=null,probeTimer=null,heartbeat=null,attempt=0,market='ALL',expiry='ALL',detail=1,selected='EURUSD',payout=.8;
@@ -57,7 +57,18 @@
     x.marketOpen=Number(susp)===1?false:raw===undefined||raw===null?null:Number(raw)===1?true:Number(raw)===0?false:null;
     x.lastStatus=x.marketOpen===true?'Ativo aberto segundo Deriv':x.marketOpen===false?'Ativo fechado segundo Deriv':'Status não informado pela Deriv';
   }
-  function errorFor(msg){const req=Number(msg?.req_id),sym=msg?.echo_req?.ticks_history||msg?.echo_req?.ticks||msg?.passthrough?.symbol||'';return {asset:bySymbol.get(sym)|| (Number.isInteger(req)&&req>=100&&req<100+BASE.length?entries[req-100]:Number.isInteger(req)&&req>=200&&req<200+BASE.length?entries[req-200]:null),operation:req>=100&&req<200?'history':req>=200&&req<300?'ticks':'general'};}
+  function historyAssetByRequest(req){
+    return Number.isInteger(req)&&req>=100&&req<100+BASE.length?entries[req-100]:
+      Number.isInteger(req)&&req>=300&&req<300+BASE.length?entries[req-300]:null;
+  }
+  function errorFor(msg){
+    const req=Number(msg?.req_id),sym=msg?.echo_req?.ticks_history||msg?.echo_req?.ticks||msg?.passthrough?.symbol||'';
+    const historyAsset=historyAssetByRequest(req);
+    return {asset:bySymbol.get(sym)||historyAsset||
+      (Number.isInteger(req)&&req>=200&&req<200+BASE.length?entries[req-200]:null),
+      operation:historyAsset?'history':req>=200&&req<300?'ticks':'general',
+      pagination:req>=300&&req<300+BASE.length};
+  }
   const el=id=>document.getElementById(id);
   const label=(id,v)=>{const n=el(id);if(n)n.textContent=v};
   const current=()=>entries.find(x=>x.id===selected)||entries[0];
@@ -69,7 +80,7 @@
   function stop(){
     removeTimers();
     if(socket){const s=socket;socket=null;s.onopen=s.onclose=s.onerror=s.onmessage=null;try{s.close()}catch(_){}}
-    connected=false;receivedSymbols=false;discovered=false;for(const x of entries){x.tick=null;x.subscribed=false;x.probeAttempted=false;x.marketOpen=null;x.marketOpenAt=0}
+    connected=false;receivedSymbols=false;discovered=false;for(const x of entries){x.tick=null;x.subscribed=false;x.probeAttempted=false;x.marketOpen=null;x.marketOpenAt=0;x.backfillBusy=false}
     render();
   }
   function queueRetry(reason){
@@ -80,7 +91,36 @@
     if(attempt%2===0)endpointIndex=(endpointIndex+1)%endpoints.length;
     reconnectTimer=setTimeout(()=>{reconnectTimer=null;connect()},Math.min(8000,2000+attempt*700));
   }
-  function queryHistory(x,force=false){if(!started||!connected)return;if(!force&&Date.now()-x.requestedAt<15000)return;x.requestedAt=Date.now();x.requests++;safeSend({ticks_history:x.symbol,style:'candles',granularity:60,count:x.historyCountDesired,end:'latest',adjust_start_time:1,req_id:100+BASE.findIndex(v=>v[0]===x.id)});}
+  function queryHistory(x,force=false){
+    if(!started||!connected)return;
+    if(!force&&Date.now()-x.requestedAt<15000)return;
+    x.requestedAt=Date.now();x.requests++;
+    safeSend({ticks_history:x.symbol,style:'candles',granularity:60,
+      count:1000,end:'latest',adjust_start_time:1,
+      req_id:100+BASE.findIndex(v=>v[0]===x.id)});
+  }
+  function scheduleBackfill(x){
+    if(!started||!connected||x.backfillBusy||x.backfillDone||!x.candles.length)return;
+    if(x.candles.length>=x.targetCandles||x.backfillPages>=8){x.backfillDone=true;return}
+    const oldest=x.candles[0].time;
+    if(oldest<=60){x.backfillDone=true;return}
+    x.backfillBusy=true;
+    const expectedSocket=socket;
+    const index=BASE.findIndex(v=>v[0]===x.id);
+    setTimeout(()=>{
+      if(!started||!connected||socket!==expectedSocket){x.backfillBusy=false;return}
+      x.backfillEnd=oldest-60;
+      const ok=safeSend({ticks_history:x.symbol,style:'candles',granularity:60,
+        count:1000,end:String(x.backfillEnd),adjust_start_time:1,req_id:300+index});
+      if(!ok){x.backfillBusy=false;x.backfillDone=true}
+    },600+index*180);
+  }
+  function evaluate(x){
+    if(x.candles.length<500){x.analysis=E.map(t=>Engine.score(x.candles,t,payout));return}
+    const shared=Engine.indicators(x.candles),ts=Date.now();
+    x.analysis=E.map(t=>Engine.score(x.candles,t,payout,ts,shared));
+    x.analysisBars=x.candles.length;
+  }
   function activate(list){
     const hasList=Array.isArray(list);
     const meta=hasList?new Map(list.map(p=>[p.underlying_symbol||p.symbol,p])):null;
@@ -135,12 +175,12 @@
         const trace=errorFor(m),detail=m.error.message||m.error.code||'Erro não especificado';
         if(trace.asset){
           if(trace.operation==='history'){
-            trace.asset.historyError=detail;
-            if(trace.asset.historyCountDesired>1000&&!trace.asset.candles.length&&
-              /count|maximum|limit|too many|exceed|range/i.test(detail)){
-              trace.asset.historyCountDesired=1000;
-              setTimeout(()=>{if(started&&connected)queryHistory(trace.asset,true)},350);
-              log('fonte','Histórico longo não aceito para '+trace.asset.id+'; repetindo com 1000 candles.');
+            if(trace.pagination&&trace.asset.candles.length){
+              trace.asset.backfillBusy=false;trace.asset.backfillDone=true;
+              trace.asset.historyError='';
+              log('histórico',trace.asset.id+': paginação interrompida pelo provedor: '+detail);
+            }else{
+              trace.asset.historyError=detail;
             }
           }
           else if(trace.operation==='ticks'){trace.asset.tickError=detail;trace.asset.subscribed=false}
@@ -155,13 +195,23 @@
       }
       if(m.msg_type==='active_symbols'&&Array.isArray(m.active_symbols)){receivedSymbols=true;activate(m.active_symbols);return}
       if((m.msg_type==='candles'||Array.isArray(m.candles))&&Array.isArray(m.candles)){
-        const sym=m.echo_req?.ticks_history||BASE[(m.req_id||100)-100]?.[1],x=bySymbol.get(sym);
+        const req=Number(m.req_id),x=bySymbol.get(m.echo_req?.ticks_history)||historyAssetByRequest(req);
         if(!x)return;
-        x.candles=Engine.normalizeCandles(m.candles);
+        const backfill=req>=300&&req<300+BASE.length;
+        const before=x.candles[0]?.time??Infinity;
+        const page=Engine.normalizeCandles(m.candles);
+        const combined=Engine.normalizeCandles([...x.candles,...page]);
+        if(backfill){
+          x.backfillBusy=false;x.backfillPages++;
+          if(!page.length||!combined.length||combined[0].time>=before)x.backfillDone=true;
+        }
+        x.candles=combined;
         x.historyError=x.candles.length?'':'Nenhum candle fechado válido na resposta';
         x.feedError=x.historyError;
-        x.lastStatus=x.candles.length?'Histórico recebido':'Sem histórico válido';
-        x.analysis=E.map(t=>Engine.score(x.candles,t,payout));
+        x.lastStatus=x.candles.length?'Histórico recebido ('+x.candles.length+' candles)':'Sem histórico válido';
+        if(backfill&&x.backfillPages>=8||x.candles.length>=x.targetCandles)x.backfillDone=true;
+        if(!backfill||x.backfillDone||x.backfillPages%2===0)evaluate(x);
+        if(!x.backfillDone)scheduleBackfill(x);
         historyCount++;render();return;
       }
       if(m.msg_type==='tick'&&m.tick){
@@ -347,6 +397,8 @@
     label('providerDetail','Fonte externa, diferente da IQ Option');
     label('diagnosticSummary',latestError||(diagnostics.length?diagnostics[0].kind+': '+diagnostics[0].message:connected?'Sem erros detectados na conexão':'Aguardando WebSocket'));
     label('historyLoaded',entries.filter(x=>x.candles.length>0).length+' de '+entries.length);
+    label('historyDepth',entries.reduce((s,x)=>s+x.candles.length,0).toLocaleString('pt-BR')+' candles · alvo até 6.000/par');
+    label('historyProgress',entries.filter(x=>x.backfillDone).length+' de '+entries.length+' finalizados');
     const open=entries.filter(x=>marketKnown(x)&&x.marketOpen===true).length,closed=entries.filter(marketClosed).length;
     label('marketStatus',entries.some(live)?'Ticks em '+entries.filter(live).length+' par(es)':!lastMetadataAt?'Aguardando status Deriv':open?'Deriv: '+open+' abertos · '+closed+' fechados':closed?'Deriv: '+closed+' fechados':'Status não informado');
     label('marketMetadata',lastMetadataAt?new Date(lastMetadataAt).toLocaleTimeString('pt-BR')+' · '+marketMessages+' consultas':'Aguardando resposta');
@@ -359,7 +411,7 @@
   }
   const p=el('payoutInput');if(p){p.value=80;p.addEventListener('change',()=>{
     const n=Number(p.value);if(!Number.isFinite(n)||n<50||n>100){p.value=Math.round(payout*100);return}
-    payout=n/100;for(const x of entries)if(x.candles.length)x.analysis=E.map(t=>Engine.score(x.candles,t,payout));
+    payout=n/100;for(const x of entries)if(x.candles.length)evaluate(x);
     render();
   })}
   el('toggle').addEventListener('click',()=>{started=!started;if(started){fallbackChecked=false;connect()}else stop()});
