@@ -210,7 +210,7 @@
         x.feedError=x.historyError;
         x.lastStatus=x.candles.length?'Histórico recebido ('+x.candles.length+' candles)':'Sem histórico válido';
         if(backfill&&x.backfillPages>=8||x.candles.length>=x.targetCandles)x.backfillDone=true;
-        if(!backfill||x.backfillDone||x.backfillPages%2===0)evaluate(x);
+        evaluate(x);
         if(!x.backfillDone)scheduleBackfill(x);
         historyCount++;render();return;
       }
