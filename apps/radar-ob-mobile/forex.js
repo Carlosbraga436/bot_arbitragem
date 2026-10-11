@@ -11,7 +11,7 @@
     ['AUDUSD','frxAUDUSD','AUD/USD'],
     ['USDCHF','frxUSDCHF','USD/CHF']
   ];
-  const entries=BASE.map(([id,symbol,name])=>({id,symbol,name,type:'FOREX',candles:[],tick:null,feedError:'',analysis:[],requestedAt:0,requests:0,lastMinuteQueried:-1,marketOpen:null,listed:null,historyError:'',tickError:'',lastStatus:'Aguardando fonte',subscribed:false,marketOpenAt:0,rawOpen:null,suspended:null,subscribeAttempt:0,probeAttempted:false}));
+  const entries=BASE.map(([id,symbol,name])=>({id,symbol,name,type:'FOREX',candles:[],tick:null,feedError:'',analysis:[],requestedAt:0,requests:0,lastMinuteQueried:-1,marketOpen:null,listed:null,historyError:'',tickError:'',lastStatus:'Aguardando fonte',subscribed:false,marketOpenAt:0,rawOpen:null,suspended:null,subscribeAttempt:0,probeAttempted:false,nextOpenAt:null,marketClosedReason:''}));
   const bySymbol=new Map(entries.map(x=>[x.symbol,x]));
   const endpoints=['wss://api.derivws.com/trading/v1/options/ws/public','wss://ws.binaryws.com/websockets/v3'];
   let started=true, socket=null,connected=false,receivedSymbols=false,discovered=false,endpointIndex=0,reconnectTimer=null,probeTimer=null,heartbeat=null,attempt=0,market='ALL',expiry='ALL',detail=1,selected='EURUSD',payout=.8;
@@ -19,12 +19,26 @@
   const diagnostics=[];
   function log(kind,message){diagnostics.unshift({at:new Date().toISOString(),kind,message:String(message||'').slice(0,280)});if(diagnostics.length>25)diagnostics.pop()}
   function nyClosed(){try{const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',weekday:'short',hour:'2-digit',hourCycle:'h23'}).formatToParts(new Date());const day=parts.find(x=>x.type==='weekday')?.value,h=Number(parts.find(x=>x.type==='hour')?.value);return day==='Sat'||day==='Fri'&&h>=17||day==='Sun'&&h<17}catch(_){return false}}
+  function parseMarketOpening(detail){
+    const m=String(detail||'').match(/market will open at\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})/i);
+    if(!m)return null;
+    const date=new Date(m[1]+'T'+m[2]+'Z');
+    return Number.isFinite(date.getTime())?date.getTime():null;
+  }
+  function nextOpen(){const times=entries.map(x=>x.nextOpenAt).filter(n=>Number.isFinite(n)&&n>Date.now()-60000);return times.length?Math.min(...times):null}
+  function formatNextOpen(){const n=nextOpen();if(!n)return 'Horário ainda não informado pela fonte';
+    const br=new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(n));
+    const utc=new Intl.DateTimeFormat('pt-BR',{timeZone:'UTC',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(n));
+    return br+' (São Paulo) · '+utc+' (UTC presumido)';
+  }
+  function remaining(){const n=nextOpen();if(!n)return '—';const secs=Math.max(0,Math.floor((n-Date.now())/1000));const h=Math.floor(secs/3600),m=Math.floor(secs%3600/60),s=secs%60;return h+'h '+String(m).padStart(2,'0')+'m '+String(s).padStart(2,'0')+'s'}
   function marketClosed(x){return x.marketOpen===false&&Date.now()-x.marketOpenAt<90000}
   function marketKnown(x){return x.marketOpenAt>0&&Date.now()-x.marketOpenAt<90000}
   function statusText(x){return marketKnown(x)?x.marketOpen===true?'ABERTO NA DERIV':x.marketOpen===false?'FECHADO NA DERIV':'STATUS NÃO INFORMADO':'STATUS NÃO CONFIRMADO'}
   function subscribe(x,force=false){
     if(!started||!connected||x.subscribed)return false;
     if(!force&&(marketClosed(x)||x.listed===false))return false;
+    if(x.nextOpenAt&&Date.now()+10000<x.nextOpenAt&&x.marketOpen!==true)return false;
     const cooldown=force?55000:15000;
     if(Date.now()-x.subscribeAttempt<cooldown)return false;
     x.subscribeAttempt=Date.now();
@@ -121,7 +135,9 @@
           if(trace.operation==='history')trace.asset.historyError=detail;
           else if(trace.operation==='ticks'){trace.asset.tickError=detail;trace.asset.subscribed=false}
           trace.asset.feedError=detail;
-          trace.asset.lastStatus=marketClosed(trace.asset)?'Forex fechado':trace.operation==='history'?'Falha ao obter histórico':'Erro da cotação';
+          const open=parseMarketOpening(detail);
+          if(open){trace.asset.nextOpenAt=open;trace.asset.marketClosedReason=detail;trace.asset.marketOpen=false;trace.asset.marketOpenAt=Date.now();}
+          trace.asset.lastStatus=open||marketClosed(trace.asset)?'Forex fechado':trace.operation==='history'?'Falha ao obter histórico':'Erro da cotação';
           log('asset '+trace.asset.id,detail);
         }else{latestError=detail;log('API',detail)}
         if(m.msg_type==='active_symbols'&&!discovered)activate(null);
@@ -146,7 +162,7 @@
         if(epoch*1000>Date.now()+10000||Date.now()-epoch*1000>30000)return;
         const past=x.tick?.epoch??0;
         if(epoch<past)return;
-        x.tick={price:p,epoch,received:Date.now()};x.tickError='';x.feedError='';x.marketOpen=true;x.marketOpenAt=Date.now();x.lastStatus='Tick recebido';
+        x.tick={price:p,epoch,received:Date.now()};x.tickError='';x.feedError='';x.marketOpen=true;x.marketOpenAt=Date.now();x.nextOpenAt=null;x.marketClosedReason='';x.lastStatus='Tick recebido';
         lastTickAt=Date.now();eventCount++;
         const last=x.candles.at(-1);
         if(last&&Math.floor(epoch/60)*60>=last.time+60){const minute=Math.floor(epoch/60);if(x.lastMinuteQueried!==minute){x.lastMinuteQueried=minute;queryHistory(x,true);setTimeout(()=>{if(started&&connected&&x.lastMinuteQueried===minute&&x.candles.at(-1)?.time<minute*60-60)queryHistory(x,true)},1700)}}
@@ -252,6 +268,26 @@
       }
     }
   }
+  function renderHistoryStudies(){
+    const root=el('historyStudies');if(!root)return;
+    root.replaceChildren();
+    const available=entries.filter(x=>x.candles.length>=250);
+    if(!available.length){const p=document.createElement('p');p.className='sub';p.textContent='Aguardando histórico mínimo de 250 candles fechados.';root.append(p);return}
+    // A lista preserva ordem alfabética dos ativos para não destacar apenas bons resultados históricos.
+    const timeFrame=expiry==='ALL'?5:Number(expiry);
+    for(const x of available){
+      const r=x.analysis.find(k=>k.expiry===timeFrame);
+      if(!r)continue;
+      const div=document.createElement('div');div.className='rowinfo';div.style.alignItems='flex-start';
+      const a=document.createElement('span');a.textContent=x.name+' · '+timeFrame+'m';a.style.minWidth='110px';
+      const b=document.createElement('b');b.style.textAlign='right';b.style.fontSize='12px';
+      b.textContent=r.sample===0?'Nenhuma ocorrência histórica':r.wins+'/'+r.sample+' acertos ('+(100*r.winRate).toFixed(1)+'%)'+(r.sample<30?' · amostra pequena':' · estudo retrospectivo');
+      div.append(a,b);root.append(div);
+    }
+    const foot=document.createElement('p');foot.className='sub';foot.textContent='Até 1.000 candles por par; não é previsão, sinal de entrada ou taxa de acerto validada fora da amostra. '+
+      (expiry==='ALL'?'Mostrando 5m; selecione outro vencimento acima para comparar.':'Vencimento selecionado: '+timeFrame+'m.');
+    root.append(foot);
+  }
   function render(){
     label('nAssets',entries.length);label('nLive',entries.filter(live).length);
     label('nListed',entries.length+' ativos');
@@ -274,6 +310,10 @@
     label('marketStatus',entries.some(live)?'Ticks em '+entries.filter(live).length+' par(es)':!lastMetadataAt?'Aguardando status Deriv':open?'Deriv: '+open+' abertos · '+closed+' fechados':closed?'Deriv: '+closed+' fechados':'Status não informado');
     label('marketMetadata',lastMetadataAt?new Date(lastMetadataAt).toLocaleTimeString('pt-BR')+' · '+marketMessages+' consultas':'Aguardando resposta');
     label('sourceOpenRaw',current().rawOpen===null?'Não informado':String(current().rawOpen));
+    label('nextOpening',formatNextOpen());
+    label('openingCountdown',remaining());
+    const banner=el('marketClosedBanner');if(banner)banner.style.display=entries.some(live)?'none':entries.some(x=>marketClosed(x))?'block':'none';
+    renderHistoryStudies();
     pills();assetList();summarize();details();
   }
   const p=el('payoutInput');if(p){p.value=80;p.addEventListener('change',()=>{
@@ -290,5 +330,5 @@
   window.addEventListener('pageshow',()=>{if(started&&!document.hidden&&!socket)connect()});
   if('serviceWorker'in navigator&&location.protocol==='https:')navigator.serviceWorker.register('/sw.js').catch(()=>{});
   render();connect();
-  setInterval(()=>{if(started&&!document.hidden){label('nLive',entries.filter(live).length);if(entries.some(x=>x.tick))render();}},1200);
+  setInterval(()=>{if(started&&!document.hidden){label('nLive',entries.filter(live).length);label('openingCountdown',remaining());if(entries.some(x=>x.tick))render()}},1200);
 })();
