@@ -1,7 +1,7 @@
 {
   "name": "Radar OB Mobile",
   "short_name": "Radar OB",
-  "description": "Radar experimental de opções binárias sob demanda",
+  "description": "Radar experimental de Forex sob demanda, com cotações públicas da Deriv e vencimentos de 1 a 30 minutos",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0b111b",
