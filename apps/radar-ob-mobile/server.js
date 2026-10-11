@@ -16,11 +16,11 @@ function response(res,code,obj){const s=JSON.stringify(obj);res.writeHead(code,{
 function authorized(req){const s=process.env.INGEST_TOKEN||'',h=(req.headers.authorization||'').replace(/^Bearer /,'');return s.length>=32&&h.length===s.length&&crypto.timingSafeEqual(Buffer.from(s),Buffer.from(h))}
 function bodyJSON(req){return new Promise((ok,fail)=>{let b='',n=0;req.on('data',v=>{n+=v.length;if(n>150000){req.destroy();fail(Error('Payload excede limite'))}else b+=v});req.on('end',()=>{try{ok(JSON.parse(b))}catch{fail(Error('JSON inválido'))}});req.on('error',fail)})}
 function onStream(req,res){res.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','cache-control':'no-store, no-transform','connection':'keep-alive','x-accel-buffering':'no'});res.write('retry: 1800\n\n');viewers.add(res);send(res,'snapshot',snapshot());const timer=setInterval(()=>{if(!res.destroyed)res.write(': keepalive\n\n')},15000);const cleanup=()=>{clearInterval(timer);viewers.delete(res)};req.on('close',cleanup);res.on('close',cleanup);}
-const files={'/':'index.html','/index.html':'index.html','/manifest.webmanifest':'manifest.webmanifest','/sw.js':'sw.js','/icon.svg':'icon.svg'};
+const files={'/':'index.html','/index.html':'index.html','/manifest.webmanifest':'manifest.webmanifest','/sw.js':'sw.js','/icon.svg':'icon.svg','/core.js':'core.js','/forex.js':'forex.js'};
 const types={'.html':'text/html; charset=utf-8','.js':'application/javascript','.svg':'image/svg+xml','.webmanifest':'application/manifest+json'};
 http.createServer(async(req,res)=>{
  const u=new URL(req.url,'http://localhost');
- if(req.method==='GET'&&u.pathname==='/api/health')return response(res,200,{ok:true,version:'5.1.0',viewers:viewers.size,feedVerified:false});
+ if(req.method==='GET'&&u.pathname==='/api/health')return response(res,200,{ok:true,version:'6.0.0',viewers:viewers.size,feedVerified:false});
  if(req.method==='GET'&&u.pathname==='/api/state')return response(res,200,snapshot());
  if(req.method==='GET'&&u.pathname==='/api/stream')return onStream(req,res);
  if(req.method==='POST'&&u.pathname==='/api/tick'){
@@ -35,5 +35,5 @@ http.createServer(async(req,res)=>{
  }
  if(req.method!=='GET')return response(res,405,{error:'Método não permitido'});
  const f=files[u.pathname];if(!f)return response(res,404,{error:'Não encontrado'});
- fs.readFile(path.join(ROOT,f),(err,data)=>{if(err)return response(res,404,{error:'Arquivo não encontrado'});res.writeHead(200,{'content-type':types[path.extname(f)],'cache-control':f==='sw.js'?'no-cache':'public, max-age=120','x-content-type-options':'nosniff','content-security-policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'"});res.end(data)});
+ fs.readFile(path.join(ROOT,f),(err,data)=>{if(err)return response(res,404,{error:'Arquivo não encontrado'});res.writeHead(200,{'content-type':types[path.extname(f)],'cache-control':f==='sw.js'?'no-cache':'public, max-age=120','x-content-type-options':'nosniff','content-security-policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss://api.derivws.com wss://ws.binaryws.com; object-src 'none'; base-uri 'none'"});res.end(data)});
 }).listen(PORT,'0.0.0.0',()=>process.stdout.write('Radar OB escutando porta '+PORT+'\n'));
