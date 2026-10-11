@@ -16,6 +16,8 @@
   const endpoints=['wss://api.derivws.com/trading/v1/options/ws/public','wss://ws.binaryws.com/websockets/v3'];
   let started=true, socket=null,connected=false,receivedSymbols=false,discovered=false,endpointIndex=0,reconnectTimer=null,probeTimer=null,heartbeat=null,attempt=0,market='ALL',expiry='ALL',detail=1,selected='EURUSD',payout=.8;
   let latestError='',eventCount=0,lastTickAt=0,subscriptionStart=0,historyCount=0,historyProbe=null,fallbackChecked=false,lastMetadataAt=0,marketMessages=0;
+  let lastHistoryViewKey='',lastChartKey='',uiQueued=false;
+  function nextFrame(){if(uiQueued)return;uiQueued=true;const task=()=>{uiQueued=false;render()};if(typeof window.requestAnimationFrame==='function')window.requestAnimationFrame(task);else setTimeout(task,0)}
   const diagnostics=[];
   function log(kind,message){diagnostics.unshift({at:new Date().toISOString(),kind,message:String(message||'').slice(0,280)});if(diagnostics.length>25)diagnostics.pop()}
   function nyClosed(){try{const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',weekday:'short',hour:'2-digit',hourCycle:'h23'}).formatToParts(new Date());const day=parts.find(x=>x.type==='weekday')?.value,h=Number(parts.find(x=>x.type==='hour')?.value);return day==='Sat'||day==='Fri'&&h>=17||day==='Sun'&&h<17}catch(_){return false}}
@@ -174,7 +176,7 @@
         lastTickAt=Date.now();eventCount++;
         const last=x.candles.at(-1);
         if(last&&Math.floor(epoch/60)*60>=last.time+60){const minute=Math.floor(epoch/60);if(x.lastMinuteQueried!==minute){x.lastMinuteQueried=minute;queryHistory(x,true);setTimeout(()=>{if(started&&connected&&x.lastMinuteQueried===minute&&x.candles.at(-1)?.time<minute*60-60)queryHistory(x,true)},1700)}}
-        render();return;
+        nextFrame();return;
       }
     };
     sock.onerror=()=>{if(socket!==sock)return;latestError='Falha de rede/WebSocket. Verifique a internet ou restrições do navegador.';log('conexão',latestError);render()};
@@ -271,6 +273,9 @@
     label('selectedRegime',r?r.regime:'Aguardando');
     label('selectedLower',r&&r.lower!==null?(r.lower*100).toFixed(1)+'%':'—');
     const svg=el('miniChart');if(svg){
+      const chartKey=x.id+'|'+x.candles.length+'|'+(x.candles.at(-1)?.time||0);
+      if(chartKey===lastChartKey)return;
+      lastChartKey=chartKey;
       const rows=x.candles.slice(-60),ns='http://www.w3.org/2000/svg';svg.replaceChildren();
       if(rows.length>=3){
         const vals=rows.map(p=>p.close),lo=Math.min(...vals),hi=Math.max(...vals),range=hi-lo||1;
@@ -281,6 +286,9 @@
   }
   function renderHistoryStudies(){
     const root=el('historyStudies');if(!root)return;
+    const key=expiry+'|'+payout+'|'+entries.map(x=>x.id+':'+x.candles.length+':'+(x.candles.at(-1)?.time||0)).join('|');
+    if(key===lastHistoryViewKey)return;
+    lastHistoryViewKey=key;
     root.replaceChildren();
     const available=entries.filter(x=>x.candles.length>=500);
     const breakeven=1/(1+payout),tf=expiry==='ALL'?5:Number(expiry);
